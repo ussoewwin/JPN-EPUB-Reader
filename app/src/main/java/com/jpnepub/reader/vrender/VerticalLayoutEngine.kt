@@ -4,42 +4,33 @@ import android.graphics.Paint
 import android.graphics.RectF
 
 /**
- * Vertical-writing typesetting engine.
+ * 縦書き組版エンジン。
  *
- * Input:  a list of [ContentNode]s + page size + style parameters.
- * Output: a list of [Page]s, each holding fully positioned
- *         [PositionedGlyph]s and [PositionedImage]s.
+ * 入力: ContentNode のリスト + ページサイズ + スタイルパラメータ
+ * 出力: Page のリスト (各ページに配置済み PositionedGlyph/PositionedImage)
  *
- * Policy:
- *  - Each character is placed at the center of an em-box of size
- *    (fontSize x fontSize).
- *  - Columns (vertical lines of text) start at the right edge and
- *    progress toward the left.
- *  - Within a single column, characters flow top-to-bottom one at a time.
- *  - Latin / ASCII characters are rotated 90 degrees clockwise.
- *    (Tate-chu-yoko "horizontal-in-vertical" is not supported in v1;
- *    single characters are simply rotated.)
- *  - Ruby annotations are drawn at a smaller size on the right-hand
- *    side of their base characters.
- *  - Images are laid out inline, reserving a slot of the image's
- *    width measured from the current column position toward the left.
- *  - The first character of a `<p>` can be indented by one em.
+ * 方針:
+ *  - 各文字を em-box (fontSize × fontSize) の中央に配置する
+ *  - カラム(縦1列) は右端から左へ進める
+ *  - 1カラム内では上から下へ1文字ずつ配置
+ *  - Latin/ASCII は 90度時計回りに回転 (縦中横は未対応。v1では単純回転)
+ *  - ルビは基字の右側に小さく配置
+ *  - 画像は現在カラム位置から左に画像幅分を確保してインライン配置
+ *  - <p> の冒頭は1字分字下げ
  *
- * Because every character's physical pixel position is finalized up
- * front, pagination is 100% stable: there is no layout drift between
- * measurement passes and no risk of "skipped" pages.
+ * これにより物理ピクセル座標が事前に確定するため、ページネーションに揺れが無い。
  */
 data class PositionedGlyph(
     val text: String,
-    val x: Float,           // Drawing origin X (CX when textAlign=CENTER)
-    val y: Float,           // Drawing origin Y (baseline)
-    val rotated: Boolean,   // Whether to apply 90-deg CW rotation (Latin etc.)
-    val isRuby: Boolean,    // Whether to render with the ruby (small) paint
+    val x: Float,           // 描画原点 X (textAlign=CENTER のCX)
+    val y: Float,           // 描画原点 Y (ベースライン)
+    val rotated: Boolean,   // 90度時計回り回転が必要か (Latin等)
+    val isRuby: Boolean,    // ルビ小文字として描画するか
 )
 
 data class PositionedImage(
     val src: String,
-    val bounds: RectF,      // Destination rectangle in physical coordinates
+    val bounds: RectF,      // 描画先の矩形 (物理座標)
 )
 
 data class Page(
@@ -56,20 +47,15 @@ class VerticalLayoutEngine(
     private val paddingTop: Int,
     private val paddingRight: Int,
     private val paddingBottom: Int,
-    /** Character advance per glyph, in em units. 1.0 = tight. */
-    private val lineHeightRatio: Float = 1.0f,
-    /** Gap between columns, in em units. */
-    private val columnGapRatio: Float = 0.4f,
-    /**
-     * Automatic paragraph indent. Defaulted to 0 because Japanese EPUB
-     * publishers already place an explicit U+3000 (ideographic space) at
-     * the start of paragraphs; adding more would double-indent.
-     */
+    private val lineHeightRatio: Float = 1.0f,   // 文字送り量 (em単位, 1.0=詰め)
+    private val columnGapRatio: Float = 0.4f,    // カラム間アキ (em単位)
+    // 自動段落インデントは 0 にする。日本語EPUBの publisher は通常
+    // 段落冒頭に "　" (U+3000 全角空白) を明示的に置いているため、
+    // 自動で追加するとインデントが二重になる。
     private val paraIndentEm: Float = 0.0f,
     /**
-     * Returns the pixel dimensions of an image, or null if unknown.
-     * Used to decide whether an image is an inline gaiji character or a
-     * full-page illustration; null is treated as "full-page".
+     * 画像のピクセル寸法を返す。外字(gaiji)インライン判定に使う。
+     * null を返した場合は判定不能として全面ページ扱いとする。
      */
     private val imageSizeResolver: (String) -> Pair<Int, Int>? = { null },
 ) {
@@ -80,8 +66,8 @@ class VerticalLayoutEngine(
         if (fontSize <= 0f || pageW <= 0 || pageH <= 0) return emptyList()
 
         val rubySize = rubyPaint.textSize
-        val advance = fontSize * lineHeightRatio                // advance per glyph
-        val rubyGap = rubySize * 0.1f                           // gap between base and ruby
+        val advance = fontSize * lineHeightRatio                // 1文字進む量
+        val rubyGap = rubySize * 0.1f                           // 基字とルビの隙間
         val columnWidth = fontSize + rubySize + rubyGap + fontSize * columnGapRatio
 
         val topEdge = paddingTop.toFloat()
@@ -89,21 +75,19 @@ class VerticalLayoutEngine(
         val rightEdge = (pageW - paddingRight).toFloat()
         val leftEdge = paddingLeft.toFloat()
 
-        // Column center-X starts at (rightEdge - fontSize/2) and moves left
-        // by columnWidth for each subsequent column.
+        // 各カラムの中心Xは rightEdge - fontSize/2 から始め、columnWidth ずつ左へ
         val firstColCenterX = rightEdge - fontSize / 2f
 
-        // Base-glyph baseline adjustment: with textAlign=CENTER we want the
-        // top of the first em-box to sit at topEdge, so we push down by the
-        // ascent.
+        // 基字ベースライン補正: CENTER揃え + 上端を topEdge に合わせたいので
+        // fontMetrics を見てアセント分下げる
         val fm = paint.fontMetrics
         val ascent = -fm.ascent
         val firstRowBaseline = topEdge + ascent
 
         var currentGlyphs = mutableListOf<PositionedGlyph>()
         var currentImages = mutableListOf<PositionedImage>()
-        var colIndex = 0              // Column index within the current page (0 = rightmost)
-        var rowY = firstRowBaseline   // Baseline Y for the next glyph
+        var colIndex = 0              // 現ページ内の何本目のカラムか (0 = 右端)
+        var rowY = firstRowBaseline   // 次に置くベースラインY
         var isFirstGlyphOfColumn = true
 
         fun currentColumnCenterX(): Float = firstColCenterX - columnWidth * colIndex
@@ -112,8 +96,7 @@ class VerticalLayoutEngine(
             colIndex++
             rowY = firstRowBaseline
             isFirstGlyphOfColumn = true
-            // If the new column would fall off the left edge of the page,
-            // finalize the current page and start a new one.
+            // カラムがページ左端を超えたらページ確定して次ページへ
             val nextCenter = firstColCenterX - columnWidth * colIndex
             if (nextCenter - fontSize / 2f < leftEdge) {
                 pages.add(Page(currentGlyphs, currentImages))
@@ -148,18 +131,17 @@ class VerticalLayoutEngine(
                     pendingParaIndent = false
                     for (chIdx in chars.indices) {
                         val rawCh = chars[chIdx]
-                        // Control whitespace (tab/CR/LF) carries no visual intent;
-                        // intentional line breaks arrive as separate LineBreak
-                        // nodes via <br>. Stripping them here avoids accidental
-                        // column breaks caused by pretty-printed XHTML source.
+                        // 改行・タブは可視文字ではない。意図的な改行は <br> → LineBreak で
+                        // 別経路に入るので、TextRun 内に紛れこんだ \n は無視する方が安全。
+                        // (EPUB の XHTML 整形由来の改行が TextRun に残ってカラムが折れる
+                        //  事故を防ぐ)
                         if (rawCh == '\n' || rawCh == '\r' || rawCh == '\t') {
                             continue
                         }
-                        // For vertical writing, normalize half-width ASCII
-                        // digits to full-width. Left as half-width they look
-                        // visually thin inside an em-box and would hit
-                        // needsRotation() (tilting them sideways), neither of
-                        // which is desirable here.
+                        // 縦書きでは半角 ASCII 数字を全角数字に正規化する。
+                        // 半角のままだと em-box 内でグリフが細く浮いて見え、さらに
+                        // needsRotation で横倒しになってしまうため、全角へ寄せて縦に
+                        // 素直に並べる方が読みやすい。
                         val ch = normalizeForVertical(rawCh)
                         if (firstChar) {
                             indentIfParagraphStart(true)
@@ -183,9 +165,7 @@ class VerticalLayoutEngine(
                     }
                 }
                 is ContentNode.Ruby -> {
-                    // Lay out the base characters one by one, then distribute
-                    // the ruby string evenly along the right-hand side of that
-                    // span in a smaller paint.
+                    // 基字を1文字ずつ配置しつつ、ルビ文字は基字の右側に小さく
                     val base = node.base
                     val ruby = node.ruby
                     if (base.isEmpty()) continue
@@ -194,7 +174,7 @@ class VerticalLayoutEngine(
                         pendingParaIndent = false
                     }
                     val baseStartY = rowY
-                    // Place the base characters (column wrap if needed).
+                    // 基字を置く (必要なら途中でカラム折返し)
                     for (ch in base) {
                         if (rowY + fm.descent > bottomEdge) {
                             startNewColumn()
@@ -211,22 +191,19 @@ class VerticalLayoutEngine(
                         )
                         advanceOneChar()
                     }
-                    // Evenly distribute the ruby characters on the right side
-                    // of the base span.
+                    // ルビ文字をカラム右側に均等配置
                     if (ruby.isNotEmpty()) {
-                        // baseStartY is the baseline of the first base glyph.
-                        // Base-character span: [baseStartY - ascent,
-                        //  baseStartY - ascent + advance*base.length].
-                        // We distribute ruby chars evenly within that span.
+                        // baseStartY は「基字1文字目のベースライン」。
+                        // 基字の縦占有範囲は [baseStartY - ascent, baseStartY - ascent + advance*base.length]
+                        // ルビを基字範囲内で均等割付する。
                         val baseSpanTop = baseStartY - ascent
                         val baseSpanBottom = baseSpanTop + advance * base.length
                         val rubyFm = rubyPaint.fontMetrics
                         val rubyAscent = -rubyFm.ascent
                         val rubyStep = (baseSpanBottom - baseSpanTop) / ruby.length
-                        // Ruby X position: column center + (fontSize/2 + rubyGap + rubySize/2)
-                        // Simplification: we use the current colIndex; if a
-                        // column break happened while placing the base this
-                        // may drift slightly, which is acceptable.
+                        // ルビX位置: カラム中央から右に (fontSize/2 + rubyGap + rubySize/2)
+                        // ただし配置のカラム中央Xは、基字1文字目があったカラム基準で。
+                        // 簡便化: 現在の colIndex を使う (カラム折返しが起きている場合はズレるが許容)
                         val rubyBaseColX = currentColumnCenterX()
                         val rubyX = rubyBaseColX + fontSize / 2f + rubyGap + rubySize / 2f
                         for ((i, rc) in ruby.withIndex()) {
@@ -245,16 +222,13 @@ class VerticalLayoutEngine(
                     }
                 }
                 is ContentNode.Image -> {
-                    // Look up the image's pixel dimensions. Small ones are
-                    // treated as inline "gaiji" (external/old-form characters)
-                    // and laid out as a single glyph; large ones become a
-                    // full-page illustration on their own page.
+                    // 画像サイズを取得し、小さければ外字(gaiji/旧字)として本文中にインライン配置する。
+                    // 大きければ挿絵として全面1ページ扱い。
                     val dims = imageSizeResolver(node.src)
                     val isInlineGaiji = if (dims != null) {
                         val (iw, ih) = dims
-                        // Threshold: treat as a gaiji if neither side exceeds
-                        // 256 px. Japanese e-book gaiji images are typically
-                        // 24-128 px square.
+                        // 閾値: どちらの辺も 256px 以下なら外字扱い。
+                        // 日本の電子書籍の外字画像は典型的に 24〜128px 四方。
                         iw in 1..256 && ih in 1..256
                     } else {
                         false
@@ -270,8 +244,8 @@ class VerticalLayoutEngine(
                         }
                         val (iw, ih) = dims!!
                         val cx = currentColumnCenterX()
-                        // Fit the image inside the em-box while preserving the
-                        // aspect ratio. (Most gaiji are square but be safe.)
+                        // em-box に内接するサイズでアスペクト比を保つ。
+                        // ほとんどの外字は正方形だが念のため。
                         val aspect = iw.toFloat() / ih.toFloat()
                         val targetH: Float
                         val targetW: Float
@@ -282,7 +256,7 @@ class VerticalLayoutEngine(
                             targetH = fontSize
                             targetW = fontSize * aspect
                         }
-                        // Top of the current em-box (baseline minus ascent).
+                        // 現在の文字セルの上端 (ベースラインから ascent 分上)
                         val cellTop = rowY - ascent
                         val drawLeft = cx - targetW / 2f
                         val drawTop = cellTop + (fontSize - targetH) / 2f
@@ -299,7 +273,7 @@ class VerticalLayoutEngine(
                         )
                         advanceOneChar()
                     } else {
-                        // Large image = illustration / cover -> its own page.
+                        // 大きい画像 = 挿絵/表紙 → 1ページまるごと
                         if (currentGlyphs.isNotEmpty() || currentImages.isNotEmpty()) {
                             pages.add(Page(currentGlyphs, currentImages))
                             currentGlyphs = mutableListOf()
@@ -328,8 +302,7 @@ class VerticalLayoutEngine(
                     }
                 }
                 is ContentNode.ParaBreak -> {
-                    // Paragraph break: close the current column and mark the
-                    // next glyph for leading indentation.
+                    // 段落区切り: 現在カラムを閉じて次カラムへ、次文字で字下げ
                     if (!isFirstGlyphOfColumn) {
                         startNewColumn()
                     }
@@ -354,66 +327,63 @@ class VerticalLayoutEngine(
     }
 
     /**
-     * Half-width -> full-width normalization for vertical writing.
+     * 半角 → 全角への縦書き向け正規化。
      *
-     *   0-9           -> U+FF10..U+FF19
-     *   A subset of ASCII punctuation that looks more natural in its
-     *   full-width form when stacked vertically (!, ?, %).  Latin letters
-     *   (A-Z, a-z) are intentionally NOT converted because the standard
-     *   Japanese convention is to rotate them 90deg within a vertical
-     *   column, not to present them as full-width.
+     *   0-9           -> ０-９  (U+FF10-FF19)
+     *   ! " # ... ~ (ASCII 印字) のうち、縦書き時に全角で並べた方が自然なもの
+     *     (! ? % など) も全角化。しかし英字 (A-Z a-z) は縦中では横倒しの方が
+     *     一般的なので変換しない。
      */
     private fun normalizeForVertical(ch: Char): Char {
         val code = ch.code
         return when (code) {
-            in 0x30..0x39 -> (code - 0x30 + 0xFF10).toChar()   // 0-9 -> 0xFF10..0xFF19
-            0x21 -> '\uFF01'  // ! -> !
-            0x3F -> '\uFF1F'  // ? -> ?
-            0x25 -> '\uFF05'  // % -> %
+            in 0x30..0x39 -> (code - 0x30 + 0xFF10).toChar()   // 0-9 → ０-９
+            0x21 -> '！'  // !
+            0x3F -> '？'  // ?
+            0x25 -> '％'  // %
             else -> ch
         }
     }
 
     /**
-     * True if this character should be rotated 90 degrees clockwise when
-     * drawn vertically.
-     *   - ASCII alphanumeric / punctuation -> rotate
-     *   - Half-width kana -> rotate (full-width is preferred anyway)
-     *   - Full-width / CJK / kana -> do not rotate (use native tategaki form)
-     *   - Horizontally-oriented punctuation marks (ellipses, dashes, wave
-     *     dashes, etc.) that should read vertically in tategaki but whose
-     *     fonts frequently lack a proper `vert` substitution -> rotate
-     *     explicitly so we do not rely on the font.
+     * 縦書き時に90度回転して描画すべき文字か判定する。
+     *   - ASCII 英数字・ASCII記号 → 回転
+     *   - 半角カタカナ → 回転 (そもそも縦書きでは全角推奨)
+     *   - 全角・CJK・かな → 回転しない (本来の縦書き字形で描画)
+     *   - 三点リーダ・二点リーダ・ダッシュ・波ダッシュ等、
+     *     「横並び前提のグリフだが縦書きでは縦並びにすべき約物」 → 回転
+     *     (Noto Serif CJK JP 等のフォントに vert 置換が用意されていない
+     *      ことがあり、フォント任せでは横のまま描画されるため明示指定)
      */
     private fun needsRotation(ch: Char): Boolean {
         val code = ch.code
-        // Printable ASCII (space doesn't need rotation)
+        // ASCII (スペースは回転不要)
         if (code in 0x21..0x7E) return true
-        // Half-width symbols / half-width katakana
+        // 半角記号・半角カナ
         if (code in 0xFF61..0xFFDC) return true
-        // Printable Latin-1 Supplement
+        // Latin-1 Supplement の印字可能
         if (code in 0x00A1..0x00FF) return true
-        // Horizontally-oriented punctuation that should stack vertically
+        // 縦書きで縦並びにしたい横書き前提の約物
         when (code) {
-            0x2013, // EN DASH
-            0x2014, // EM DASH
-            0x2015, // HORIZONTAL BAR (dash)
-            0x2025, // TWO DOT LEADER
-            0x2026, // HORIZONTAL ELLIPSIS
-            0x2212, // MINUS SIGN
-            0x22EF, // MIDLINE HORIZONTAL ELLIPSIS
-            0x3030, // WAVY DASH
-            0x301C, // WAVE DASH
-            0xFF5E, // FULLWIDTH TILDE
-            0xFF0D, // FULLWIDTH HYPHEN-MINUS
-            0x2500, // BOX DRAWINGS LIGHT HORIZONTAL
-                    //   (commonly abused as an em-dash in Japanese e-books)
-            0x2501, // BOX DRAWINGS HEAVY HORIZONTAL
-            0x2010, // HYPHEN
-            0x2011, // NON-BREAKING HYPHEN
-            0x2012, // FIGURE DASH
-            0x2043, // HYPHEN BULLET
-            0xFE58  // SMALL EM DASH
+            0x2013, // – EN DASH
+            0x2014, // — EM DASH
+            0x2015, // ― HORIZONTAL BAR (ダッシュ)
+            0x2025, // ‥ TWO DOT LEADER
+            0x2026, // … HORIZONTAL ELLIPSIS (三点リーダ)
+            0x2212, // − MINUS SIGN
+            0x22EF, // ⋯ MIDLINE HORIZONTAL ELLIPSIS
+            0x3030, // 〰 WAVY DASH
+            0x301C, // 〜 WAVE DASH
+            0xFF5E, // ～ FULLWIDTH TILDE
+            0xFF0D, // － FULLWIDTH HYPHEN-MINUS
+            0x2500, // ─ BOX DRAWINGS LIGHT HORIZONTAL
+                    //   (金田一耕助ファイル等で em dash 代わりに多用される)
+            0x2501, // ━ BOX DRAWINGS HEAVY HORIZONTAL
+            0x2010, // ‐ HYPHEN
+            0x2011, // ‑ NON-BREAKING HYPHEN
+            0x2012, // ‒ FIGURE DASH
+            0x2043, // ⁃ HYPHEN BULLET
+            0xFE58  // ﹘ SMALL EM DASH
             -> return true
         }
         return false

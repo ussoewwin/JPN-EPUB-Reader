@@ -19,10 +19,8 @@ class EpubRenderer(private val book: EpubBook, private val config: ReaderConfig)
     }
 
     /**
-     * Returns true for image-dominated pages such as covers or
-     * full-page illustrations (pages with almost no body text).
-     * For those we skip the vertical-writing CSS injection so that
-     * the publisher's image layout is preserved unchanged.
+     * 表紙や挿絵専用ページ（画像メイン・本文テキストがほぼ無い）かを判定。
+     * 該当する場合は縦書きCSSを注入しない（画像レイアウトを破壊しないため）。
      */
     private fun isImageOnlyPage(html: String): Boolean {
         val bodyMatch = Regex(
@@ -57,9 +55,8 @@ class EpubRenderer(private val book: EpubBook, private val config: ReaderConfig)
     }
 
     /**
-     * Also translate `-epub-` prefixed CSS properties that appear
-     * inside inline <style> tags and style="" attributes within the
-     * HTML document body, not only inside external stylesheets.
+     * HTML内の <style> タグやインライン style 属性に含まれる
+     * -epub- プレフィックスプロパティも変換する。
      */
     private fun convertEpubCssInHtml(html: String): String {
         if (!html.contains("-epub-", ignoreCase = true)) return html
@@ -67,25 +64,17 @@ class EpubRenderer(private val book: EpubBook, private val config: ReaderConfig)
     }
 
     private fun buildFontFallbackCss(isImageOnlyPage: Boolean): String {
-        // We inject writing-mode + fixed dimensions ONLY for vertical
-        // body pages. Without fixing html height the page would
-        // scroll infinitely downward and break pagination; so we pin
-        // html/body to 100vh/100vw. Image-only pages (covers etc.)
-        // are left alone so the publisher's layout survives.
-        //
-        // Vertical body pages use transform-based pagination:
-        //   - html: viewport-sized + overflow:hidden (clipping layer)
-        //   - body: writing-mode:vertical-rl, natural width (grows to
-        //          the left), safe padding.
-        //   - Page turns are done in JS via:
-        //        body.transform = translateX(N * clientW)
-        //
-        // We used to use scrollLeft, but Chromium flipped the sign
-        // convention for vertical-rl, and publisher CSS with its own
-        // overflow declarations made the approach unreliable, so
-        // transform is the new baseline.
-        //
-        // !important is required so we outrank the EPUB's own CSS.
+        // 縦書き本文のみ writing-mode と寸法固定を注入する。
+        // html の高さを固定しないとコンテンツが縦に無限スクロールし
+        // ページネーション計算が壊れるため、必ず100vh/100vwで固定する。
+        // 画像メインページ（表紙等）は既存レイアウトを尊重して何も注入しない。
+        // 縦書き本文ページ用のCSS。transform ベースのページネーションを採用:
+        //   - html: viewport固定 + overflow:hidden (クリッピング層)
+        //   - body: writing-mode:vertical-rl + 自然な幅 (左に伸びる) + 安全余白
+        //   - ページ送りはJS側で body.transform = translateX(N*clientW)
+        // scrollLeft 方式は Chromium の vertical-rl scroll 符号変更、
+        // および EPUB 独自CSSの overflow との競合で不安定のため廃止。
+        // !important を付けて EPUB 側CSSに負けないようにする。
         val verticalCss = if (book.isVertical && !isImageOnlyPage) """
 html {
     -webkit-writing-mode: vertical-rl !important;
@@ -103,13 +92,11 @@ body {
     margin: 0 !important;
     padding: 20px 16px !important;
     box-sizing: border-box !important;
-    /* Pin the transform origin to top-right; this is the natural
-       starting corner for vertical-rl pagination. */
+    /* ページ送り用 transform の原点を右上に固定 (縦書きの自然な開始位置) */
     transform-origin: top right !important;
-    /* Do not let body itself scroll; we move it via CSS transform. */
+    /* body 自体はスクロールさせない (transform で動かす) */
     overflow: visible !important;
-    /* Intentionally no fixed width: body grows naturally to the left
-       as columns flow. */
+    /* widthは指定しない: コンテンツに応じて左方向に自然拡張させる */
 }
 img, svg, image, video {
     -webkit-writing-mode: horizontal-tb !important;
@@ -175,11 +162,9 @@ $boldCss
     }
 
     /**
-     * Convert `-epub-` prefixed CSS properties (EPUB3 standard) into
-     * the unprefixed properties that WebView actually understands.
-     * The original property is left in place and the standard one is
-     * appended, so nothing breaks for renderers that do honor the
-     * prefixed form.
+     * EPUB3標準の -epub- プレフィックスCSSプロパティを
+     * WebViewが認識する標準CSSに変換する。
+     * 元のプロパティは残し、標準プロパティを追加する形にする。
      */
     private fun convertEpubCssProperties(css: String): String {
         var result = css

@@ -6,50 +6,44 @@ import org.xmlpull.v1.XmlPullParserFactory
 import java.io.StringReader
 
 /**
- * Converts XHTML content into a list of [ContentNode]s.
+ * XHTML コンテンツを ContentNode のリストに変換する。
  *
- * XHTML is well-formed XML, so we use [XmlPullParser] which is robust
- * against incidental noise. Elements handled:
- *
- *   <p> / <div>       -> paragraph (ParaBreak)
- *   <br>              -> line break (LineBreak)
- *   <ruby><rt>..</rt></ruby> -> Ruby (annotation currently discarded)
- *   <img src="..">    -> Image
- *   <h1>..<h6>        -> treated as a paragraph (ParaBreak around it)
- *   <script> <style>  -> contents discarded
- *   anything else     -> transparent (descendants' text is still picked up)
+ * XHTML は整形式 XML なので XmlPullParser で堅牢にパースする。
+ * 扱う要素:
+ *   <p> / <div>       → 段落 (ParaBreak)
+ *   <br>              → 改行 (LineBreak)
+ *   <ruby><rt>..</rt></ruby> → Ruby
+ *   <img src="..">    → Image
+ *   <h1>..<h6>        → 段落扱い (ParaBreak 前後)
+ *   <script> <style>  → 内容を破棄
+ *   それ以外のタグ     → 透過 (子孫のテキストは拾う)
  */
 class ContentExtractor {
 
     fun extract(xhtml: String, chapterDir: String): List<ContentNode> {
         val nodes = mutableListOf<ContentNode>()
 
-        // Normalize to "starts with <html...>" to dodge fragile XML
-        // declarations / DOCTYPEs.
+        // XML宣言などで壊れる場合があるので、<html から始まる形に正規化
         val cleaned = preprocess(xhtml)
 
         val parser = newParser()
         parser.setInput(StringReader(cleaned))
 
         val textBuffer = StringBuilder()
-        var skipDepth = 0        // Inside <script> / <style> / <head>
-        // Ruby annotations are not rendered. We still need to know when
-        // we're inside <rt> / <rp> so that their text gets discarded.
+        var skipDepth = 0        // <script> / <style> 内はスキップ
+        // ルビは表示しない方針。<rt>/<rp> の内容だけは破棄したいので、そこだけフラグ管理する。
         var inRt = false
         var inRp = false
 
         fun flushText() {
             if (textBuffer.isEmpty()) return
-            // 1) Strip control whitespace (tab / CR / LF). Those come
-            //    from XHTML pretty-printing and have no display intent.
-            // 2) Collapse runs of ASCII spaces to a single space.
-            // 3) Drop any ASCII space directly adjacent to a non-ASCII
-            //    character (CJK, Japanese punctuation, full-width, etc.).
-            //    Real EPUB files routinely have newlines / indentation
-            //    around <img/> and <ruby>...</ruby>, and those spaces
-            //    should not consume horizontal glyphs in vertical
-            //    Japanese text. Spaces *between* ASCII letters remain,
-            //    because those ARE genuine word separators.
+            // 1) 制御空白 (tab/CR/LF) を除去。
+            //    XML 整形由来の \n は表示意図がない。
+            // 2) 連続する半角スペースを 1 つに潰す。
+            // 3) 非 ASCII (= CJK・日本語句読点・全角) の隣にある半角スペースを除去。
+            //    EPUB の XHTML では <img/> や <ruby>...</ruby> の前後にタグ整形用の
+            //    改行・インデントが頻出するが、その部分は視覚的に空白を入れる意図が
+            //    ない。英字同士の " " は本来の単語区切りなので残す。
             val t = textBuffer.toString()
                 .replace(Regex("[\\u0009\\u000A\\u000D]+"), "")
                 .replace(Regex(" +"), " ")
@@ -74,20 +68,15 @@ class ContentExtractor {
                         when (name) {
                             "script", "style", "head" -> skipDepth++
                             "ruby" -> {
-                                // We no longer attempt to render ruby. The
-                                // base characters are just flowed into the
-                                // main text buffer as-is; only <rt>/<rp>
-                                // contents are discarded below.
-                                //
-                                // An earlier version kept base characters
-                                // in a separate `rubyBase` buffer, which
-                                // broke ordering and allowed \n from XHTML
-                                // formatting to leak through.
+                                // ルビはレイアウトしない。ruby 内の基字は通常の流し込み
+                                // (textBuffer) にそのまま乗せ、<rt>/<rp> だけ破棄する。
+                                // 旧実装は別バッファ rubyBase に溜めて \n 混入や順序問題を
+                                // 引き起こしていたので完全にやめた。
                                 flushText()
                             }
                             "rt" -> inRt = true
                             "rp" -> inRp = true
-                            "rb" -> { /* Base chars flow straight into textBuffer */ }
+                            "rb" -> { /* 基字はそのまま textBuffer に流れる */ }
                             "br" -> {
                                 flushText()
                                 nodes.add(ContentNode.LineBreak)
@@ -102,10 +91,8 @@ class ContentExtractor {
                             }
                             "image" -> {
                                 flushText()
-                                // SVG's <image xlink:href="..." />. With
-                                // namespace-aware=false we have to look up
-                                // the attribute by its literal prefixed
-                                // name.
+                                // SVG内の <image xlink:href="..." /> (namespace-aware=false のため
+                                // 属性名は "xlink:href" の literal で引く)
                                 val href = parser.getAttributeValue(null, "href")
                                     ?: parser.getAttributeValue(null, "xlink:href")
                                     ?: parser.getAttributeValue("http://www.w3.org/1999/xlink", "href")
@@ -115,14 +102,10 @@ class ContentExtractor {
                                     nodes.add(ContentNode.Image(resolved))
                                 }
                             }
-                            // div / section / article are semantically
-                            // generic grouping elements. If we treated
-                            // them as paragraph breaks, EPUBs that wrap
-                            // every character in its own <div> for
-                            // decorative reasons would end up with each
-                            // character in its own column. So we limit
-                            // paragraph semantics to <p>, headings, list
-                            // items, etc.
+                            // div / section / article は semantic には grouping 用途であり
+                            // 段落区切りに使うと、<div>駒</div><div>形</div>... のような
+                            // 1文字ずつ装飾目的で div 化された EPUB が各文字独立カラムに
+                            // なってしまう。段落扱いは p / 見出し / 箇条書き等に限定する。
                             "p", "h1", "h2", "h3", "h4", "h5", "h6",
                             "li", "blockquote", "pre" -> {
                                 emitParaBreak()
@@ -134,13 +117,10 @@ class ContentExtractor {
                         when (name) {
                             "script", "style", "head" -> if (skipDepth > 0) skipDepth--
                             "ruby" -> {
-                                // Flushing at </ruby> also strips any
-                                // formatting whitespace that lived
-                                // inside the ruby element -- for
-                                // example the EPUB3 compound form:
-                                //   <ruby>\n<rb>...</rb> <rt>...</rt> <rb>...</rb>\n</ruby>
-                                // whose inter-tag spaces would otherwise
-                                // leak into the flow.
+                                // ruby 閉じ時は基字側を flush する。flushText の
+                                // 「非 ASCII 隣接スペース除去」規則で、EPUB3 複合ルビの
+                                //   <ruby>\n<rb>桟</rb> <rt>さん</rt> <rb>橋</rb>\n</ruby>
+                                // のようにタグ間にある整形空白が自動で落ちる。
                                 flushText()
                             }
                             "rt" -> inRt = false
@@ -152,9 +132,9 @@ class ContentExtractor {
                     }
                     XmlPullParser.TEXT -> {
                         if (skipDepth > 0) {
-                            // Inside <script>/<style>/<head>
+                            // <script>/<style>/<head> 内はスキップ
                         } else if (inRt || inRp) {
-                            // Inside <rt> (ruby text) / <rp> (ruby parenthesis)
+                            // ルビのよみがな (<rt>) / 括弧 (<rp>) は表示しない
                         } else {
                             textBuffer.append(parser.text ?: "")
                         }
@@ -163,12 +143,11 @@ class ContentExtractor {
                 event = parser.next()
             }
         } catch (e: Exception) {
-            // If the parser blows up mid-document, return whatever we
-            // already collected rather than failing the whole chapter.
+            // パーサ途中で壊れても、そこまでのノードを返す
         }
 
         flushText()
-        // Trim redundant trailing ParaBreak nodes.
+        // 末尾の冗長 ParaBreak を落とす
         while (nodes.isNotEmpty() && nodes.last() is ContentNode.ParaBreak) {
             nodes.removeAt(nodes.size - 1)
         }
@@ -176,9 +155,7 @@ class ContentExtractor {
     }
 
     /**
-     * Extract the substring starting at the first `<html ...>` tag.
-     * This sidesteps breakage caused by namespace declarations and
-     * DOCTYPE boilerplate above it.
+     * <html ...> で始まる部分を抽出。名前空間やDOCTYPEで失敗するケースを緩和。
      */
     private fun preprocess(xhtml: String): String {
         val htmlStart = Regex("<html\\b", RegexOption.IGNORE_CASE).find(xhtml)
@@ -190,7 +167,7 @@ class ContentExtractor {
         val factory = XmlPullParserFactory.newInstance()
         factory.isNamespaceAware = false
         val parser = factory.newPullParser()
-        // Accept HTML-style entity references leniently.
+        // HTML由来の実体参照を寛容に扱う
         try {
             parser.setFeature("http://xmlpull.org/v1/doc/features.html#relaxed", true)
         } catch (_: Exception) { }
@@ -212,8 +189,7 @@ class ContentExtractor {
 
     companion object {
         /**
-         * Convenience: extract nodes directly from the raw bytes of an
-         * EPUB spine item.
+         * EPUB の spine アイテム data (ByteArray) からテキストを抽出する便利関数。
          */
         fun extractFromBytes(data: ByteArray, chapterDir: String): List<ContentNode> {
             val text = EpubParser.decodeWithDetection(data)

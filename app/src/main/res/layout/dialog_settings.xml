@@ -31,7 +31,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/font_size_small"
+            android:text="小"
             android:textSize="12sp" />
 
         <SeekBar
@@ -48,7 +48,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/font_size_large"
+            android:text="大"
             android:textSize="18sp" />
 
         <TextView
@@ -76,7 +76,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="@string/rtl_page_turn"
+        android:text="右から左にめくる（縦書き向け）"
         android:checked="true" />
 
     <!-- Dark mode -->
@@ -85,7 +85,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="@string/dark_mode"
+        android:text="ダークモード"
         android:checked="false" />
 
     <!-- Bold -->
@@ -94,7 +94,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="@string/bold_text"
+        android:text="太字"
         android:checked="false" />
 
 </LinearLayout>
