@@ -1,0 +1,54 @@
+# -----------------------------
+# Android / Gradle build outputs
+# -----------------------------
+build/
+app/build/
+.gradle/
+.kotlin/
+
+# -----------------------------
+# Local config / signing
+# -----------------------------
+local.properties
+*.keystore
+*.jks
+keystore.properties
+
+# -----------------------------
+# IDE files
+# -----------------------------
+.idea/
+*.iml
+.vscode/
+.cursor/
+
+# -----------------------------
+# OS junk
+# -----------------------------
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# -----------------------------
+# Captures / profiling
+# -----------------------------
+captures/
+*.hprof
+
+# -----------------------------
+# Test / sample books (copyrighted content must not be pushed)
+# -----------------------------
+*.epub
+epub_unzipped/
+_epub_dump/
+
+# -----------------------------
+# Generated assets that can be regenerated on demand
+# -----------------------------
+assets/ic_launcher_source.png
+
+# -----------------------------
+# Terminals / agent scratch
+# -----------------------------
+terminals/
+agent-transcripts/
