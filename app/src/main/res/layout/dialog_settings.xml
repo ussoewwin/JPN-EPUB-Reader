@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/settings"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Font size -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/font_size"
+        android:textSize="14sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="4dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="小"
+            android:textSize="12sp" />
+
+        <SeekBar
+            android:id="@+id/seekFontSize"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:min="12"
+            android:max="32"
+            android:progress="18"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="大"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/tvFontSizeValue"
+            android:layout_width="40dp"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="18"
+            android:textSize="14sp"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
+    <!-- Writing mode -->
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchVertical"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="@string/vertical"
+        android:checked="true" />
+
+    <!-- Page turn direction -->
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchRtlPage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="右から左にめくる（縦書き向け）"
+        android:checked="true" />
+
+    <!-- Dark mode -->
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchDarkMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="ダークモード"
+        android:checked="false" />
+
+    <!-- Bold -->
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchBold"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="太字"
+        android:checked="false" />
+
+</LinearLayout>
