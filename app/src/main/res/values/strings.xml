@@ -1,14 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">JPN-EPUB-Reader</string>
-    <string name="bookshelf_empty">EPUBファイルを追加してください</string>
-    <string name="open_file">ファイルを開く</string>
-    <string name="settings">設定</string>
-    <string name="font_size">文字サイズ</string>
-    <string name="writing_mode">縦書き / 横書き</string>
-    <string name="vertical">縦書き</string>
-    <string name="horizontal">横書き</string>
-    <string name="toc">目次</string>
-    <string name="loading">読み込み中…</string>
-    <string name="error_open_file">ファイルを開けませんでした</string>
+    <string name="bookshelf_empty">Please add an EPUB file</string>
+    <string name="open_file">Open file</string>
+    <string name="settings">Settings</string>
+    <string name="font_size">Font size</string>
+    <string name="writing_mode">Vertical / Horizontal</string>
+    <string name="vertical">Vertical writing</string>
+    <string name="horizontal">Horizontal writing</string>
+    <string name="toc">Table of contents</string>
+    <string name="loading">Loading…</string>
+    <string name="error_open_file">Failed to open file</string>
+
+    <!-- Reader dialogs -->
+    <string name="font_size_small">S</string>
+    <string name="font_size_large">L</string>
+    <string name="rtl_page_turn">Turn pages right-to-left (for vertical text)</string>
+    <string name="dark_mode">Dark mode</string>
+    <string name="bold_text">Bold text</string>
+
+    <!-- Reader buttons -->
+    <string name="action_back">Back</string>
+    <string name="action_prev_page">Previous page</string>
+    <string name="action_next_page">Next page</string>
+
+    <!-- Reader dialog buttons -->
+    <string name="action_apply">Apply</string>
+    <string name="action_cancel">Cancel</string>
+
+    <!-- Reader messages -->
+    <string name="toc_not_available">No table of contents available</string>
+    <string name="untitled">Untitled</string>
+    <string name="author_unknown">Unknown</string>
+    <string name="progress_format">%1$d/%2$d (ch. %3$d/%4$d)</string>
 </resources>

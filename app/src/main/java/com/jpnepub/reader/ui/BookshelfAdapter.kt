@@ -3,6 +3,7 @@ package com.jpnepub.reader.ui
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
+import com.jpnepub.reader.R
 import com.jpnepub.reader.databinding.ItemBookBinding
 
 class BookshelfAdapter(
@@ -15,7 +16,9 @@ class BookshelfAdapter(
 
         fun bind(entry: MainActivity.BookEntry) {
             binding.tvBookTitle.text = entry.title
-            binding.tvBookAuthor.text = entry.author.ifEmpty { "不明" }
+            binding.tvBookAuthor.text = entry.author.ifEmpty {
+                binding.root.context.getString(R.string.author_unknown)
+            }
             binding.tvBookPath.text = entry.uri.lastPathSegment ?: ""
             binding.root.setOnClickListener { onClick(entry) }
         }

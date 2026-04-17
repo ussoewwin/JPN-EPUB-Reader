@@ -45,7 +45,10 @@ _epub_dump/
 # -----------------------------
 # Generated assets that can be regenerated on demand
 # -----------------------------
+# Note: the high-res master PNG is kept under assets/ so contributors can
+# regenerate the mipmap densities without rerunning the image generator.
 assets/ic_launcher_source.png
+assets/playstore-icon-source.png
 
 # -----------------------------
 # Terminals / agent scratch
