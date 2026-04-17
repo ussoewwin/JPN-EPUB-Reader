@@ -14,20 +14,17 @@ import android.view.View
 import java.util.Locale
 
 /**
- * Custom [View] that draws EPUB chapter content directly onto a [Canvas].
+ * EPUBチャプターを Canvas で直接描画する独自 View。
  *
- * The WebView-based renderer had a list of hard-to-debug problems:
- * skipped pages, flaky `scrollLeft` values, unsupported `writing-mode`
- * on some Android versions, and general layout drift between measurement
- * passes. This view sidesteps all of that by pre-computing the exact
- * pixel position of every glyph and drawing them one by one with
- * `Canvas.drawText`.
+ * WebView ベースで起きていた問題 (ページ飛ばし、scrollLeft の不定値、
+ * writing-mode 非対応、layout ゆらぎ) を根本から回避するため、
+ * テキスト位置を事前に物理ピクセルで確定させ、描画は Canvas.drawText だけで行う。
  *
- * Usage:
+ * 使い方:
  *   val v = VerticalEpubView(ctx)
- *   v.onPageChanged     = { page, total -> /* UI update */ }
- *   v.onChapterBoundary = { direction   -> /* load next/prev chapter */ }
- *   v.setStyle(fontSizePx, darkMode, bold)
+ *   v.onPageChanged = { page, total -> /* UI update */ }
+ *   v.onChapterBoundary = { direction -> /* load next/prev chapter */ }
+ *   v.setStyle(fontSizePx, darkMode)
  *   v.setChapter(contentNodes, imageResolver)
  *   v.nextPage() / v.prevPage() / v.jumpToPage(n)
  */
@@ -38,19 +35,15 @@ class VerticalEpubView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     /**
-     * OpenType feature settings required for proper Japanese vertical
-     * typesetting.
+     * 縦書き日本語用の OpenType フィーチャ設定。
+     *  vert : 縦書き用グリフ置換 (「」『』（）、。ー 等を縦書き字形に)
+     *  vkrn : 縦書き用カーニング
+     *  vpal : 縦書きプロポーショナル幅 (縦書きでの欧文詰め)
+     *  vhal : 縦書き用半角字形 (句読点の半角化)
+     *  palt : 横書きプロポーショナル幅 (回転Latinで使われる)
      *
-     *  vert : vertical glyph substitution (tategaki forms for brackets,
-     *         commas, long vowel marks, etc.)
-     *  vkrn : vertical kerning
-     *  vpal : vertical proportional metrics (Western spacing in tategaki)
-     *  vhal : vertical half-width forms (half-width punctuation)
-     *  palt : horizontal proportional metrics (used when rotating Latin)
-     *
-     * Without these, brackets like `「」『』（）` and `ー` keep their
-     * horizontal forms and the result is unusable as Japanese vertical
-     * text. See W3C JLReq sections 2.1 and 2.3.
+     * これを設定しないと 「」『』 括弧や ー 長音が横書き字形のまま描画され、
+     * 日本語縦書きとして全く体裁が成立しない。W3C JLReq §2.1/§2.3 要件。
      */
     private val verticalFontFeatures = "'vert' 1, 'vkrn' 1, 'vpal' 1, 'vhal' 1"
 
@@ -63,16 +56,13 @@ class VerticalEpubView @JvmOverloads constructor(
         try {
             val style = if (boldEnabled) Typeface.BOLD else Typeface.NORMAL
             p.typeface = Typeface.create(Typeface.SERIF, style)
-            // If the loaded typeface does not contain a real bold glyph
-            // the platform will auto-synthesize a faux-bold, but the
-            // strength can be inconsistent across sizes. Forcing
-            // isFakeBoldText on top gives a more predictable result
-            // while still letting fonts that *do* have bold glyphs
-            // (like Noto Serif CJK JP) use them.
+            // フォントに真の太字グリフが入っていない場合、システムが自動で
+            // フェイクボールドを当てるがサイズによっては効きが弱いので、
+            // isFakeBoldText で追加の太らせを明示的に当てる。Noto Serif CJK JP
+            // は Bold 字形を持っているがメトリクスが揃っている方が挙動が安定。
             p.isFakeBoldText = boldEnabled
         } catch (_: Throwable) { }
-        // Pin the locale to Japan so the shaper doesn't fall back to
-        // Chinese glyph variants.
+        // 中国語字形に化けるのを防ぐため日本語ロケールを明示
         try {
             p.textLocales = LocaleList(Locale.JAPAN)
         } catch (_: Throwable) {
@@ -81,7 +71,7 @@ class VerticalEpubView @JvmOverloads constructor(
                 p.textLocale = Locale.JAPAN
             } catch (_: Throwable) { }
         }
-        // Enable vertical OpenType features.
+        // 縦書き OpenType フィーチャを有効化
         try { p.fontFeatureSettings = verticalFontFeatures } catch (_: Throwable) { }
     }
 
@@ -98,13 +88,12 @@ class VerticalEpubView @JvmOverloads constructor(
     private val bgPaint = Paint().apply { color = Color.parseColor("#F5F0E8") }
     private val imagePaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG)
 
-    // --- State ---
+    // --- 状態 ---
     private var content: List<ContentNode> = emptyList()
     private var pages: List<Page> = emptyList()
     private var currentPage: Int = 0
     private var imageResolver: (String) -> ByteArray? = { null }
-    // Cache of image pixel dimensions. The layout engine hits this very
-    // frequently when classifying images as inline-gaiji vs full-page.
+    // 画像ピクセル寸法キャッシュ。外字(gaiji)判定でレイアウト時に頻繁に問い合わせが入るため。
     private val imageSizeCache = HashMap<String, Pair<Int, Int>?>()
 
     private fun resolveImageSize(src: String): Pair<Int, Int>? {
@@ -126,18 +115,17 @@ class VerticalEpubView @JvmOverloads constructor(
         return size
     }
 
-    // Style knobs
+    // スタイル設定
     private var fontSizePx: Float = 40f
     private var lineHeightRatio: Float = 1.1f
-    private var paddingH: Int = 48  // Left/right padding (px)
-    private var paddingV: Int = 48  // Top/bottom padding (px)
+    private var paddingH: Int = 48  // 左右パディング (px)
+    private var paddingV: Int = 48  // 上下パディング (px)
     private var darkMode: Boolean = false
 
-    // --- Callbacks ---
-    /** Invoked on page change: (currentPageIndex, totalPagesInChapter). */
+    // --- コールバック ---
+    /** ページ変更時: (currentPageIndex, totalPagesInChapter) */
     var onPageChanged: ((Int, Int) -> Unit)? = null
-    /** Invoked when the user tries to cross a chapter boundary.
-     *  +1 for next, -1 for previous. */
+    /** チャプター境界を越えようとしたとき: +1 = 次, -1 = 前 */
     var onChapterBoundary: ((Int) -> Unit)? = null
 
     init {
@@ -160,7 +148,7 @@ class VerticalEpubView @JvmOverloads constructor(
         this.darkMode = darkMode
         this.boldEnabled = bold
 
-        // Re-apply typeface / fakeBold with the new bold state.
+        // typeface / fakeBold を新しい bold 状態で再設定
         applyJpStyle(mainPaint)
         applyJpStyle(rubyPaint)
         mainPaint.textSize = fontSizePx
@@ -179,10 +167,8 @@ class VerticalEpubView @JvmOverloads constructor(
     }
 
     /**
-     * Replace the chapter content and reset to the first page.
-     * When [startFromEnd] is true, after re-pagination the view will
-     * show the last page (used when stepping *backwards* across a
-     * chapter boundary).
+     * チャプターのコンテンツを差し替え、先頭ページに戻す。
+     * startFromEnd=true のとき、ページネーション後に最終ページを表示する。
      */
     fun setChapter(
         content: List<ContentNode>,
@@ -243,24 +229,19 @@ class VerticalEpubView @JvmOverloads constructor(
     private val tmpInkBounds = Rect()
 
     /**
-     * Em-box placement correction for Japanese opening / closing brackets
-     * in vertical writing.
+     * 縦書き日本語の始め括弧・終わり括弧の em-box 内配置補正。
      *
-     * According to JLReq / JIS X 4051, opening brackets `「『（【〔〈《〖`
-     * should sit in the lower half of the em-box (with ~half-width aki
-     * on top) and closing brackets `」』）】〕〉》〗` in the upper half
-     * (with aki on the bottom). Fonts like Noto CJK JP provide proper
-     * tategaki glyph *shapes* via the `vert` feature, but Android's
-     * `Paint` doesn't fully apply the `vpal` / `vhal` vertical
-     * positioning, so the glyph ends up centered in the em-box and
-     * visually collides with the previous character.
+     * JLReq / JIS X 4051 では始め括弧 (「『（【〔〈《〖) は em-box の下半分寄せ
+     * (上に半角アキ)、終わり括弧 (」』）】〕〉》〗) は上半分寄せ (下に半角アキ)
+     * となる。Noto CJK JP 等では vert フィーチャでグリフ形状は縦書き用に
+     * 置換されるものの、Android の Paint では vpal/vhal の垂直位置補正が
+     * 完全には効かず em-box 中央に鎮座してしまい、先行文字と密着する。
      *
-     * We measure the actual ink bounding box and shift the drawing
-     * baseline so that the ink's center lands at the desired vertical
-     * fraction of the em-box.
+     * ここでインクの実バウンディングボックスを測定し、望ましい縦位置に
+     * インク中心が来るよう描画ベースラインをシフトする。
      *
-     *   opening bracket: ink center at 3/4 of the em-box (pushed down)
-     *   closing bracket: ink center at 1/4 of the em-box (pushed up)
+     *   開き括弧: ink center を em-box の 3/4 位置 (下寄せ)
+     *   閉じ括弧: ink center を em-box の 1/4 位置 (上寄せ)
      */
     private fun bracketYShift(text: String, paint: Paint): Float {
         if (text.length != 1) return 0f
@@ -271,8 +252,8 @@ class VerticalEpubView @JvmOverloads constructor(
             else                 -> return 0f
         }
         val fm = paint.fontMetrics
-        val emTop = fm.ascent         // Relative to baseline (negative)
-        val emBottom = fm.descent     // Relative to baseline (positive)
+        val emTop = fm.ascent         // 基線からの相対 (負値)
+        val emBottom = fm.descent     // 基線からの相対 (正値)
         val emHeight = emBottom - emTop
         val desiredInkCenterOffset = emTop + emHeight * targetFraction
         paint.getTextBounds(text, 0, text.length, tmpInkBounds)
@@ -281,47 +262,47 @@ class VerticalEpubView @JvmOverloads constructor(
     }
 
     private fun isOpenBracket(code: Int): Boolean = when (code) {
-        0xFF08, // (
-        0x300C, // [
-        0x300E, // [
-        0x3010, // [
-        0x3014, // [
-        0x3008, // <
-        0x300A, // <<
-        0x3016, // [
-        0xFF3B, // [
-        0xFF5B, // {
-        0xFE35, // (presentation form)
-        0xFE37,
-        0xFE39,
-        0xFE3B,
-        0xFE3D,
-        0xFE3F,
-        0xFE41,
-        0xFE43
+        0xFF08, // （
+        0x300C, // 「
+        0x300E, // 『
+        0x3010, // 【
+        0x3014, // 〔
+        0x3008, // 〈
+        0x300A, // 《
+        0x3016, // 〖
+        0xFF3B, // ［
+        0xFF5B, // ｛
+        0xFE35, // ︵ (presentation form)
+        0xFE37, // ︷
+        0xFE39, // ︹
+        0xFE3B, // ︻
+        0xFE3D, // ︽
+        0xFE3F, // ︿
+        0xFE41, // ﹁
+        0xFE43  // ﹃
         -> true
         else -> false
     }
 
     private fun isCloseBracket(code: Int): Boolean = when (code) {
-        0xFF09, // )
-        0x300D, // ]
-        0x300F, // ]
-        0x3011, // ]
-        0x3015, // ]
-        0x3009, // >
-        0x300B, // >>
-        0x3017, // ]
-        0xFF3D, // ]
-        0xFF5D, // }
-        0xFE36,
-        0xFE38,
-        0xFE3A,
-        0xFE3C,
-        0xFE3E,
-        0xFE40,
-        0xFE42,
-        0xFE44
+        0xFF09, // ）
+        0x300D, // 」
+        0x300F, // 』
+        0x3011, // 】
+        0x3015, // 〕
+        0x3009, // 〉
+        0x300B, // 》
+        0x3017, // 〗
+        0xFF3D, // ］
+        0xFF5D, // ｝
+        0xFE36, // ︶
+        0xFE38, // ︸
+        0xFE3A, // ︺
+        0xFE3C, // ︼
+        0xFE3E, // ︾
+        0xFE40, // ﹀
+        0xFE42, // ﹂
+        0xFE44  // ﹄
         -> true
         else -> false
     }
@@ -329,20 +310,15 @@ class VerticalEpubView @JvmOverloads constructor(
     private fun drawGlyph(canvas: Canvas, g: PositionedGlyph) {
         val paint = if (g.isRuby) rubyPaint else mainPaint
         if (g.rotated) {
-            // Glyphs that must be rotated 90 deg clockwise in tategaki.
+            // 縦書き中で 90度時計回り描画する文字。
             //
-            // If we rotate around the em-box center (the midpoint of
-            // ascent/descent), characters whose ink clusters near the
-            // baseline -- such as an ellipsis "..." -- end up
-            // horizontally offset from the column center after rotation.
+            // フォントメトリクスの em-box 中心 (ascent/descent の中点) を回転軸にすると、
+            // "…" のようにインクがベースライン近辺に集中している字は、回転後にカラム中央から
+            // 横に大きくズレる (ベースラインと em-box 中心の落差分ぶん左にシフト)。
             //
-            // So instead we:
-            //   1. Measure the actual ink bounding box.
-            //   2. Rotate around that ink's center.
-            //   3. Translate so the ink center aligns with the em-box
-            //      vertical center.
-            // This way both Latin "A" and the ellipsis end up on the
-            // column's visual axis.
+            // そこで、glyph の実際のインクバウンディングボックスを取り、その中心を回転軸にした
+            // 上で、インク中心がカラム中央 (em-box 垂直中心) に来るように追加の縦シフトを当てる。
+            // これで Latin の A も三点リーダ … も同じ論理で正しくカラム中央に乗る。
             paint.getTextBounds(g.text, 0, g.text.length, tmpInkBounds)
             val inkCenterY = g.y + (tmpInkBounds.top + tmpInkBounds.bottom) / 2f
             val fm = paint.fontMetrics
@@ -365,8 +341,7 @@ class VerticalEpubView @JvmOverloads constructor(
         } catch (_: Throwable) {
             return
         } ?: return
-        // Fit the bitmap inside the target bounds while preserving
-        // aspect ratio.
+        // アスペクト比を保って bounds にフィット
         val bw = bmp.width.toFloat()
         val bh = bmp.height.toFloat()
         if (bw <= 0 || bh <= 0) return
@@ -381,7 +356,7 @@ class VerticalEpubView @JvmOverloads constructor(
         canvas.drawBitmap(bmp, null, dst, imagePaint)
     }
 
-    // --- Public pagination API ---
+    // --- 公開ページ操作 API ---
     fun pageCount(): Int = pages.size.coerceAtLeast(1)
     fun currentPageIndex(): Int = currentPage
 

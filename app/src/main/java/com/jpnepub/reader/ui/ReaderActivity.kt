@@ -41,12 +41,9 @@ class ReaderActivity : AppCompatActivity() {
     private var downY = 0f
     private var downTime = 0L
 
-    /** Vertical-writing EPUBs are rendered through the native Canvas
-     *  pipeline instead of the WebView. */
+    /** 縦書きEPUBは Canvas ベースのネイティブ描画を使う */
     private var useNativeVertical = false
-    /** Request flag: when switching chapters via "previous page" from
-     *  the first page of a chapter, start the next chapter on its last
-     *  page rather than its first. */
+    /** チャプター切替時、次チャプターを末尾から表示する指示 (前ページ操作で境界を越えた場合) */
     private var pendingStartFromEnd = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -147,7 +144,7 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     // ================================================================
-    //   Native vertical View setup
+    //   ネイティブ縦書き View のセットアップ
     // ================================================================
     private fun setupNativeView() {
         val fontSizePx = TypedValue.applyDimension(
@@ -173,7 +170,7 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     // ================================================================
-    //   WebView setup (used only for horizontal writing)
+    //   WebView のセットアップ (横書き用にのみ使用)
     // ================================================================
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private fun setupWebView() {
@@ -210,9 +207,8 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     /**
-     * Pagination JavaScript for horizontal writing (FolioReader-style:
-     * CSS multi-column layout + scrollLeft). Vertical writing uses the
-     * native Canvas renderer, so this WebView path is horizontal-only.
+     * 横書き用ページネーション JS (FolioReader 方式: CSS columns + scrollLeft)。
+     * 縦書きは Canvas ネイティブレンダリングを使うので WebView 経路は横書き専用。
      */
     private fun pagerJs(): String {
         return """
@@ -336,13 +332,7 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun updateProgress(page: Int, totalPages: Int) {
         val b = book ?: return
-        binding.tvProgress.text = getString(
-            R.string.progress_format,
-            page + 1,
-            totalPages,
-            currentChapter + 1,
-            b.spine.size
-        )
+        binding.tvProgress.text = "${page + 1}/$totalPages (${currentChapter + 1}/${b.spine.size}章)"
     }
 
     private fun toggleBars() {
@@ -355,7 +345,7 @@ class ReaderActivity : AppCompatActivity() {
     private fun showTocDialog() {
         val b = book ?: return
         if (b.toc.isEmpty()) {
-            Toast.makeText(this, R.string.toc_not_available, Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "目次がありません", Toast.LENGTH_SHORT).show()
             return
         }
         val titles = b.toc.map { it.title }.toTypedArray()
@@ -393,7 +383,7 @@ class ReaderActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setView(dialogBinding.root)
-            .setPositiveButton(R.string.action_apply) { _, _ ->
+            .setPositiveButton("適用") { _, _ ->
                 config = config.copy(
                     fontSizePx = dialogBinding.seekFontSize.progress,
                     verticalWriting = dialogBinding.switchVertical.isChecked,
@@ -417,13 +407,12 @@ class ReaderActivity : AppCompatActivity() {
                 showActiveRenderer()
                 loadChapter(currentChapter)
             }
-            .setNegativeButton(R.string.action_cancel, null)
+            .setNegativeButton("キャンセル", null)
             .setOnDismissListener {
-                // The settings dialog is opened from the "bars visible"
-                // state. While bars are visible the touch handler above
-                // delegates to super() without driving page turns, so
-                // we auto-hide the bars here to return to a plain
-                // reading mode.
+                // 設定を開くには barsVisible=true の状態から入るため、
+                // ダイアログ終了時にもそのままだと左右タップで頁送りが効かない
+                // (barsVisible 中は super に委譲されるだけでページ操作が走らない)。
+                // ここで自動的に bars を閉じて通常の閲覧モードへ戻す。
                 if (barsVisible) toggleBars()
             }
             .show()
