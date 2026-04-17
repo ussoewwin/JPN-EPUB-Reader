@@ -1,70 +1,122 @@
-# JPN-EPUB-Reader — 文字化けしない Android EPUB リーダー
+# JPN-EPUB-Reader
 
-CJK文字（漢字・ひらがな・カタカナ）の文字化けを防止することに特化した、Android向けEPUBリーダーアプリです。
+A **vertical-writing EPUB reader for Android**, purpose-built for
+Japanese text and obsessive about not producing garbled characters
+(*mojibake*).
 
-## 特徴
+The app ships with a custom native Canvas-based typesetting engine
+that replaces the usual WebView approach, so Japanese books render
+the way they should: right-to-left columns, proper em-box positioning
+of brackets and punctuation, correct rotation of Latin / dashes /
+ellipses, and pixel-perfect page boundaries that never skip.
 
-### 文字化け防止
-- **ICU4J によるエンコーディング自動検出**: BOM検出 → XML/HTML宣言のcharset → ICU4J統計的検出 の3段階で文字コードを正確に判定
-- **CJKフォントフォールバック**: `Noto Sans/Serif CJK JP`, `Source Han Sans/Serif`, `Hiragino`, `Yu Gothic/Mincho` 等の日本語フォントを優先的に使用
-- **Unicode範囲指定**: CJK統合漢字・拡張領域（U+2E80-9FFF, U+20000-2FA1F）を明示的にフォント指定
-- **WebView の defaultTextEncodingName を UTF-8 に強制**
+## Features
 
-### 縦書き対応
-- EPUB内のCSS `writing-mode: vertical-rl` を自動検出
-- 設定で縦書き/横書きを切り替え可能
-- 縦書き時の句読点・約物の正しい配置
+### No more mojibake
+- **ICU4J charset auto-detection.** Byte stream is classified by
+  (1) BOM, (2) the `encoding` declared in the XML/HTML prolog, and
+  (3) ICU4J statistical detection.  Shift_JIS and EUC-JP inputs
+  decode as reliably as UTF-8.
+- **CJK font fallback.** `Noto Sans/Serif CJK JP`, `Source Han
+  Sans/Serif`, `Hiragino`, `Yu Gothic/Mincho`, `Meiryo` — tried in
+  that order before ever touching a Latin-only fallback.
+- **Explicit Unicode ranges.** CJK unified ideographs and their
+  extensions (U+2E80-9FFF, U+F900-FAFF, U+FE30-FE4F, U+20000-2FA1F)
+  are wired to the CJK fallback via `@font-face unicode-range`.
+- **WebView `defaultTextEncodingName` forced to UTF-8** as a safety
+  net for books that ship without a charset declaration.
 
-### リーダー機能
-- 章ナビゲーション（前/次、目次ジャンプ）
-- フォントサイズ調整（12px〜32px）
-- ダークモード
-- タップゾーン操作（左1/4: 前ページ、右1/4: 次ページ、中央: メニュー表示）
-- EPUB2/EPUB3 両対応
+### Real Japanese vertical writing
+The vertical renderer is NOT a WebView with `writing-mode: vertical-rl`
+slapped on. It is a custom `View` that:
+- Pre-computes the exact pixel position of every glyph before drawing,
+  so pagination is deterministic and never skips a page.
+- Lays out right-to-left columns, top-to-bottom characters.
+- Enables the OpenType features required for tategaki (`vert`, `vkrn`,
+  `vpal`, `vhal`) and pins the text locale to Japan so the shaper
+  cannot fall back to Chinese glyph variants.
+- Rotates Latin letters, half-width kana, dashes, and horizontal
+  ellipses 90 degrees clockwise **around the actual ink bounding box**,
+  then re-centers them to the column axis — so `A`, `...`, `--`, and
+  `─` all sit cleanly on the vertical line.
+- Shifts Japanese opening / closing brackets (`「『（`, `」』）`) into
+  their proper half of the em-box per JLReq / JIS X 4051, eliminating
+  the usual "brackets collide with the preceding character" bug.
+- Normalizes half-width ASCII digits (0-9) and common punctuation
+  (!, ?, %) to their full-width counterparts so numerals read
+  naturally upright in a vertical column.
+- Supports inline gaiji (external / legacy-form kanji) images that
+  most Japanese e-books use: any image at most 256x256 px is treated as
+  an inline character and sized to the em-box; anything larger is
+  treated as a full-page illustration.
 
-## ビルド方法
+### Reader features
+- EPUB 2 and EPUB 3.
+- Chapter navigation: previous / next chapter and a table-of-contents
+  jump.
+- Font size: 12-32 sp, persisted across sessions.
+- Dark mode.
+- Bold text toggle (uses real bold glyphs from Noto Serif CJK JP when
+  available, with a synthesized fake-bold fallback).
+- Tap-zone page turning: left third = previous page, right third =
+  next page, center = toggle menu bars. Direction is swappable to
+  match right-to-left reading of Japanese books.
+- EPUB spine boundary handling: tapping "previous" from the first
+  page of a chapter transparently loads the previous chapter and
+  starts you on its last page.
 
-### 必要環境
-- Android Studio Hedgehog (2023.1.1) 以降
+## Build
+
+### Requirements
+- Android Studio Hedgehog (2023.1.1) or newer
 - JDK 17
-- Android SDK 34
+- Android SDK 34+
 
-### 手順
-
-1. プロジェクトを Android Studio で開く
-2. Gradle Sync を実行
-3. デバイスまたはエミュレータで実行
+### Steps
+1. Open the project in Android Studio.
+2. Let Gradle sync.
+3. Run on a device or emulator.
 
 ```bash
-# コマンドラインからビルドする場合
+# Command line:
 ./gradlew assembleDebug
 ```
 
-## プロジェクト構成
+The resulting APK is named `JPN-EPUB-Reader-1.0.0-debug.apk` under
+`app/build/outputs/apk/debug/`.
+
+## Project layout
 
 ```
 app/src/main/java/com/jpnepub/reader/
-├── epub/
-│   └── EpubParser.kt          # EPUB解析・エンコーディング検出
-├── renderer/
-│   ├── EpubRenderer.kt        # WebView用HTML生成・CSSインジェクション
-│   └── ReaderConfig.kt        # リーダー設定（永続化）
-└── ui/
-    ├── MainActivity.kt         # 本棚画面
-    ├── BookshelfAdapter.kt     # 本棚リスト
-    └── ReaderActivity.kt       # リーダー画面
++-- epub/
+|   +-- EpubParser.kt          EPUB parsing, encoding detection
++-- renderer/
+|   +-- EpubRenderer.kt        HTML preparation for the WebView
+|   +-- ReaderConfig.kt        Reader settings (persisted)
++-- vrender/
+|   +-- ContentNode.kt         Semantic content unit (TextRun / Ruby / Image / breaks)
+|   +-- ContentExtractor.kt    XHTML -> ContentNode conversion
+|   +-- VerticalLayoutEngine.kt  Pure typesetter (ContentNode -> positioned glyphs)
+|   +-- VerticalEpubView.kt    Custom View that draws positioned glyphs on a Canvas
++-- ui/
+    +-- MainActivity.kt        Bookshelf screen
+    +-- BookshelfAdapter.kt    Bookshelf list
+    +-- ReaderActivity.kt      Reader screen
 ```
 
-## 文字化けの技術的原因と対策
+## Root causes of mojibake and how this project fixes each one
 
-| 原因 | 対策 |
-|------|------|
-| EPUBファイルがShift_JIS/EUC-JPで記述されている | ICU4Jで文字コードを自動検出し正しくデコード |
-| デバイスフォントに該当グリフがない | CJK Unicode範囲を明示した@font-face定義で複数フォントへフォールバック |
-| XML宣言のencodingが不正/欠落 | BOM → XML宣言 → ICU4J検出 の3段階フォールバック |
-| WebViewのデフォルトエンコーディング問題 | `defaultTextEncodingName = "UTF-8"` + `<meta charset="UTF-8">` 強制注入 |
-| CSSでLatin系フォントが優先されている | `font-family: inherit !important` で全要素のフォントを統一 |
+| Cause | Fix |
+|---|---|
+| EPUB file is encoded as Shift_JIS / EUC-JP | ICU4J statistical detection after BOM and declared-charset checks |
+| Device has no glyph for the requested character | `@font-face` with explicit CJK Unicode ranges that fan out to Noto CJK, Source Han, Hiragino, Yu Gothic, Meiryo |
+| XML prolog declares a wrong or missing encoding | BOM -> prolog -> ICU4J chain, any one of which can recover |
+| WebView default encoding fight | `defaultTextEncodingName = "UTF-8"` plus forced `<meta charset="UTF-8">` injection |
+| Publisher CSS prefers a Latin-only family | Font fallback stylesheet is injected with `!important` so CJK families win |
+| Punctuation / dashes / ellipses rendered horizontally in vertical text | Explicit 90-degree rotation with ink-bbox-centered pivot in the native renderer |
+| Brackets collide with the previous character in vertical text | Per-glyph y-shift based on the actual ink bounds, targeting JLReq / JIS X 4051 positions |
 
-## ライセンス
+## License
 
-MIT License
+MIT License.

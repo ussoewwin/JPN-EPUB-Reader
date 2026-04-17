@@ -153,7 +153,7 @@ class EpubParser(private val context: Context) {
         val toc = parseToc(manifestItems, opfDir, resources)
 
         return EpubBook(
-            title = title.ifEmpty { "無題" },
+            title = title.ifEmpty { "Untitled" },
             author = author,
             language = language.ifEmpty { "ja" },
             spine = spine,
@@ -280,8 +280,11 @@ class EpubParser(private val context: Context) {
 
     companion object {
         /**
-         * ICU4Jを使ってバイト列のエンコーディングを自動検出し、文字列に変換する。
-         * XML/HTML宣言のcharset指定も参照し、CJK文字の正確なデコードを保証する。
+         * Auto-detect the encoding of a byte array with ICU4J and decode
+         * it into a string. The BOM and any declared charset in an
+         * XML/HTML prolog are consulted first, guaranteeing accurate
+         * decoding of CJK content even when the underlying file is
+         * Shift_JIS, EUC-JP, or similar legacy encodings.
          */
         fun decodeWithDetection(data: ByteArray): String {
             // First, check for BOM

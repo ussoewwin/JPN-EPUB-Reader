@@ -1,25 +1,30 @@
 package com.jpnepub.reader.vrender
 
 /**
- * EPUBチャプターから抽出した「意味のあるコンテンツ単位」。
- * XHTML のタグ・スタイルを剥がし、組版に必要な情報だけ保持する。
+ * A semantically meaningful unit of content extracted from an EPUB chapter.
+ * XHTML tags and styles are stripped away, keeping only what the typesetter
+ * needs.
  *
- * VerticalLayoutEngine はこのリストを受け取って各文字の物理ピクセル位置を
- * 事前計算し、VerticalEpubView が Canvas に描画する。
+ * [VerticalLayoutEngine] consumes a list of these and pre-computes the
+ * physical pixel position of every glyph, and [VerticalEpubView] draws them
+ * on a Canvas.
  */
 sealed class ContentNode {
-    /** 通常の地の文。連続した文字列。 */
+    /** A run of plain flowing body text. */
     data class TextRun(val text: String) : ContentNode()
 
-    /** ルビ: base の文字列に対し、ruby の文字列を振る。 */
+    /** Ruby annotation: [ruby] characters are annotated over [base]. */
     data class Ruby(val base: String, val ruby: String) : ContentNode()
 
-    /** 画像。chapterDir基準で解決済みの絶対パス。resources から引ける前提。 */
+    /** An image, as an absolute path resolved against the chapter directory
+     *  so it can be looked up directly from `book.resources`. */
     data class Image(val src: String) : ContentNode()
 
-    /** 段落区切り (新しい行=縦書きでは新しいカラムを開始、行頭字下げあり)。 */
+    /** Paragraph break (starts a new column in vertical writing, with
+     *  leading indentation). */
     object ParaBreak : ContentNode()
 
-    /** 明示的な改行 <br> (字下げなしで次カラム)。 */
+    /** Explicit line break `<br>` (advances to the next column without
+     *  adding a leading indent). */
     object LineBreak : ContentNode()
 }

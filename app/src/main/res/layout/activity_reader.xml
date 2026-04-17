@@ -35,7 +35,7 @@
             android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:src="@android:drawable/ic_menu_close_clear_cancel"
-            android:contentDescription="戻る"
+            android:contentDescription="@string/action_back"
             android:tint="@color/white" />
 
         <TextView
@@ -88,7 +88,7 @@
             android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:src="@android:drawable/ic_media_previous"
-            android:contentDescription="前のページ"
+            android:contentDescription="@string/action_prev_page"
             android:tint="@color/white" />
 
         <TextView
@@ -106,7 +106,7 @@
             android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:src="@android:drawable/ic_media_next"
-            android:contentDescription="次のページ"
+            android:contentDescription="@string/action_next_page"
             android:tint="@color/white" />
     </LinearLayout>
 
