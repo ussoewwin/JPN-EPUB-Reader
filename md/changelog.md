@@ -4,6 +4,39 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.02
+
+### Vertical typesetter — illustration scale (gaiji vs cover vs body art)
+
+- **Problem:** All small bitmaps were treated as inline gaiji whenever
+  both sides were ≤ 256 px. Publisher illustrations such as
+  `class="inline_01"` (e.g. 76 × 128 px in Kadokawa EPUBs) were shrunk to
+  a single em-box and looked like a tiny stamp next to the text.
+- **Fix:** `ContentNode.Image` now carries the `<img>` / SVG `<image>`
+  `class` attribute (`cssClass`). `VerticalLayoutEngine` classifies each
+  image into **GAIJI** (character-sized inline), **FULLPAGE** (cover /
+  full-bleed plate), or **HALFPAGE** (centered illustration, at most half
+  the text area in width and height), using publisher classes first:
+  - **GAIJI:** `gaiji`, `gaiji-line`, `gaiji-wide`, or no class with both
+    dimensions ≤ 64 px (legacy EPUB fallback).
+  - **FULLPAGE:** `fit`, `cover`, `full`, `pagefit*`, `page80*`, or no
+    class with short side ≥ 600 px (typical cover bitmaps with no class).
+  - **HALFPAGE:** `inline`, `inline_01`, `inline_001`, etc., or remaining
+    cases — drawn centred with aspect ratio preserved.
+- **Regression addressed:** After an interim change that scaled every
+  non-gaiji image to “half page”, bare cover images (e.g. `style="width:100%;
+  height:100%"` with no class) were also halved. They are **FULLPAGE**
+  again via the short-side ≥ 600 px rule; `class="fit"` plates stay
+  full-area as well.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/vrender/ContentNode.kt
+app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
+app/src/main/java/com/jpnepub/reader/vrender/VerticalLayoutEngine.kt
+```
+
 ## v1.01
 
 ### Bookshelf — fix metadata that was always "Untitled / Unknown"
@@ -100,8 +133,9 @@ typesetting engine.
   bottom half of the em-box, `」』）` into the top half).
 - Half-width digit / punctuation normalisation to full-width for
   vertical reading.
-- Inline gaiji rendering for body text (`<img>` ≤ 256 × 256 px sized
-  to the em-box, larger images treated as full-page illustrations).
+- Inline gaiji rendering for body text (early heuristic: small `<img>`
+  bitmaps sized to the em-box; **v1.02** replaced this with class- and
+  dimension-based rules — see **v1.02**).
 - Tap-zone page turning, dark mode, configurable font size, bold
   toggle, table-of-contents jump, RTL page direction toggle.
 - App icon set (mdpi → xxxhdpi mipmaps and a 512 × 512 Play Store
