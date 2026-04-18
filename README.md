@@ -117,6 +117,11 @@ app/src/main/java/com/jpnepub/reader/
 | Punctuation / dashes / ellipses rendered horizontally in vertical text | Explicit 90-degree rotation with ink-bbox-centered pivot in the native renderer |
 | Brackets collide with the previous character in vertical text | Per-glyph y-shift based on the actual ink bounds, targeting JLReq / JIS X 4051 positions |
 
+## Changelog
+
+See [`md/changelog.md`](md/changelog.md) for the full release history.
+The most recent release is **v1.01**.
+
 ## License
 
 MIT License.
