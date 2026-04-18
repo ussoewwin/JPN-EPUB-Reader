@@ -339,10 +339,10 @@ class VerticalLayoutEngine(
                     val headingAdvance = advance * scale
                     // 拡大字のem-box下端でオーバーフロー判定するための係数
                     val scaledDescent = fm.descent * scale
-                    val textChars = node.text.filter { it != '\n' && it != '\r' && it != '\t' }
-                    for (rawCh in textChars) {
-                        val ch = normalizeForVertical(rawCh)
-                        // 次の1文字が今のカラムに収まらなければカラム折返し
+                    val scaledAscent = ascent * scale
+                    val scaledFont = fontSize * scale
+
+                    fun placeHeadingChar(ch: Char) {
                         if (rowY + scaledDescent > bottomEdge) {
                             startNewColumn()
                         }
@@ -361,6 +361,60 @@ class VerticalLayoutEngine(
                         )
                         rowY += headingAdvance
                         isFirstGlyphOfColumn = false
+                    }
+
+                    fun placeHeadingImage(src: String) {
+                        // 見出し中の外字 (gaiji) を 1 文字分の em-box にインライン配置する。
+                        // 寸法不明なら正方形扱いで em-box にフィット。
+                        if (rowY + scaledDescent > bottomEdge) {
+                            startNewColumn()
+                        }
+                        val dims = imageSizeResolver(src)
+                        val aspect = if (dims != null && dims.first > 0 && dims.second > 0) {
+                            dims.first.toFloat() / dims.second.toFloat()
+                        } else {
+                            1f
+                        }
+                        val targetH: Float
+                        val targetW: Float
+                        if (aspect >= 1f) {
+                            targetW = scaledFont
+                            targetH = scaledFont / aspect
+                        } else {
+                            targetH = scaledFont
+                            targetW = scaledFont * aspect
+                        }
+                        val cx = currentColumnCenterX()
+                        val cellTop = rowY - scaledAscent
+                        val drawLeft = cx - targetW / 2f
+                        val drawTop = cellTop + (scaledFont - targetH) / 2f
+                        currentImages.add(
+                            PositionedImage(
+                                src = src,
+                                bounds = RectF(
+                                    drawLeft,
+                                    drawTop,
+                                    drawLeft + targetW,
+                                    drawTop + targetH
+                                )
+                            )
+                        )
+                        rowY += headingAdvance
+                        isFirstGlyphOfColumn = false
+                    }
+
+                    for (part in node.parts) {
+                        when (part) {
+                            is ContentNode.HeadingPart.Text -> {
+                                val chars = part.text.filter { it != '\n' && it != '\r' && it != '\t' }
+                                for (rawCh in chars) {
+                                    placeHeadingChar(normalizeForVertical(rawCh))
+                                }
+                            }
+                            is ContentNode.HeadingPart.Image -> {
+                                placeHeadingImage(part.src)
+                            }
+                        }
                     }
                     // 見出し直後は必ず次カラムへ回し、本文と同じカラムに続かないようにする。
                     if (!isFirstGlyphOfColumn) {

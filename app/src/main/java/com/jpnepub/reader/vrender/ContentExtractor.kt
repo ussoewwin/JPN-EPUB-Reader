@@ -36,8 +36,20 @@ class ContentExtractor {
         var inRp = false
         // 見出し収集: <h1>〜<h6> の中身は、通常の本文 TextRun とは別に貯めて
         // <hN> 終了時に Heading ノードとして1回だけ吐く。ネストは想定しない。
+        // テキスト断片と画像 (gaiji) 断片を順序保持で集める。
         var headingLevel = 0
         val headingBuffer = StringBuilder()
+        val headingParts = mutableListOf<ContentNode.HeadingPart>()
+
+        fun flushHeadingText() {
+            if (headingBuffer.isEmpty()) return
+            val t = headingBuffer.toString()
+                .replace(Regex("[\\u0009\\u000A\\u000D]+"), "")
+                .replace(Regex(" +"), " ")
+                .replace(Regex("(?<=[^\\x00-\\x7E]) | (?=[^\\x00-\\x7E])"), "")
+            if (t.isNotEmpty()) headingParts.add(ContentNode.HeadingPart.Text(t))
+            headingBuffer.setLength(0)
+        }
 
         fun flushText() {
             if (textBuffer.isEmpty()) return
@@ -89,27 +101,33 @@ class ContentExtractor {
                                 // 見出し内の <br> は単に無視 (1行の見出しとして整形)
                             }
                             "img" -> {
-                                if (headingLevel == 0) {
-                                    flushText()
-                                    val src = parser.getAttributeValue(null, "src") ?: ""
-                                    if (src.isNotEmpty() && !src.startsWith("data:")) {
-                                        val resolved = resolveRelativePath(chapterDir, src)
+                                val src = parser.getAttributeValue(null, "src") ?: ""
+                                if (src.isNotEmpty() && !src.startsWith("data:")) {
+                                    val resolved = resolveRelativePath(chapterDir, src)
+                                    if (headingLevel == 0) {
+                                        flushText()
                                         nodes.add(ContentNode.Image(resolved))
+                                    } else {
+                                        flushHeadingText()
+                                        headingParts.add(ContentNode.HeadingPart.Image(resolved))
                                     }
                                 }
                             }
                             "image" -> {
-                                if (headingLevel == 0) {
-                                    flushText()
-                                    // SVG内の <image xlink:href="..." /> (namespace-aware=false のため
-                                    // 属性名は "xlink:href" の literal で引く)
-                                    val href = parser.getAttributeValue(null, "href")
-                                        ?: parser.getAttributeValue(null, "xlink:href")
-                                        ?: parser.getAttributeValue("http://www.w3.org/1999/xlink", "href")
-                                        ?: ""
-                                    if (href.isNotEmpty() && !href.startsWith("data:")) {
-                                        val resolved = resolveRelativePath(chapterDir, href)
+                                // SVG内の <image xlink:href="..." /> (namespace-aware=false のため
+                                // 属性名は "xlink:href" の literal で引く)
+                                val href = parser.getAttributeValue(null, "href")
+                                    ?: parser.getAttributeValue(null, "xlink:href")
+                                    ?: parser.getAttributeValue("http://www.w3.org/1999/xlink", "href")
+                                    ?: ""
+                                if (href.isNotEmpty() && !href.startsWith("data:")) {
+                                    val resolved = resolveRelativePath(chapterDir, href)
+                                    if (headingLevel == 0) {
+                                        flushText()
                                         nodes.add(ContentNode.Image(resolved))
+                                    } else {
+                                        flushHeadingText()
+                                        headingParts.add(ContentNode.HeadingPart.Image(resolved))
                                     }
                                 }
                             }
@@ -123,6 +141,7 @@ class ContentExtractor {
                                     nodes.add(ContentNode.PageBreak)
                                     headingLevel = (name[1].digitToIntOrNull() ?: 1).coerceIn(1, 6)
                                     headingBuffer.setLength(0)
+                                    headingParts.clear()
                                 }
                             }
                             // div / section / article は semantic には grouping 用途であり
@@ -149,16 +168,18 @@ class ContentExtractor {
                             "rp" -> inRp = false
                             "h1", "h2", "h3", "h4", "h5", "h6" -> {
                                 if (headingLevel > 0) {
-                                    // headingBuffer からフラッシュ相当の正規化を掛けて Heading に。
-                                    val raw = headingBuffer.toString()
-                                        .replace(Regex("[\\u0009\\u000A\\u000D]+"), "")
-                                        .replace(Regex(" +"), " ")
-                                        .replace(Regex("(?<=[^\\x00-\\x7E]) | (?=[^\\x00-\\x7E])"), "")
-                                        .trim()
-                                    if (raw.isNotEmpty()) {
-                                        nodes.add(ContentNode.Heading(raw, headingLevel))
+                                    // 残テキストを断片化してから Heading を吐く。
+                                    flushHeadingText()
+                                    if (headingParts.isNotEmpty()) {
+                                        nodes.add(
+                                            ContentNode.Heading(
+                                                headingParts.toList(),
+                                                headingLevel
+                                            )
+                                        )
                                     }
                                     headingBuffer.setLength(0)
+                                    headingParts.clear()
                                     headingLevel = 0
                                     // 見出しの後は段落扱いで次カラムへ (次の <p> との間を空ける)
                                     if (nodes.isNotEmpty() && nodes.last() !is ContentNode.ParaBreak) {
