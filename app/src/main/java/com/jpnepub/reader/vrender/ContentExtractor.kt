@@ -34,6 +34,10 @@ class ContentExtractor {
         // ルビは表示しない方針。<rt>/<rp> の内容だけは破棄したいので、そこだけフラグ管理する。
         var inRt = false
         var inRp = false
+        // 見出し収集: <h1>〜<h6> の中身は、通常の本文 TextRun とは別に貯めて
+        // <hN> 終了時に Heading ノードとして1回だけ吐く。ネストは想定しない。
+        var headingLevel = 0
+        val headingBuffer = StringBuilder()
 
         fun flushText() {
             if (textBuffer.isEmpty()) return
@@ -78,37 +82,55 @@ class ContentExtractor {
                             "rp" -> inRp = true
                             "rb" -> { /* 基字はそのまま textBuffer に流れる */ }
                             "br" -> {
-                                flushText()
-                                nodes.add(ContentNode.LineBreak)
+                                if (headingLevel == 0) {
+                                    flushText()
+                                    nodes.add(ContentNode.LineBreak)
+                                }
+                                // 見出し内の <br> は単に無視 (1行の見出しとして整形)
                             }
                             "img" -> {
-                                flushText()
-                                val src = parser.getAttributeValue(null, "src") ?: ""
-                                if (src.isNotEmpty() && !src.startsWith("data:")) {
-                                    val resolved = resolveRelativePath(chapterDir, src)
-                                    nodes.add(ContentNode.Image(resolved))
+                                if (headingLevel == 0) {
+                                    flushText()
+                                    val src = parser.getAttributeValue(null, "src") ?: ""
+                                    if (src.isNotEmpty() && !src.startsWith("data:")) {
+                                        val resolved = resolveRelativePath(chapterDir, src)
+                                        nodes.add(ContentNode.Image(resolved))
+                                    }
                                 }
                             }
                             "image" -> {
+                                if (headingLevel == 0) {
+                                    flushText()
+                                    // SVG内の <image xlink:href="..." /> (namespace-aware=false のため
+                                    // 属性名は "xlink:href" の literal で引く)
+                                    val href = parser.getAttributeValue(null, "href")
+                                        ?: parser.getAttributeValue(null, "xlink:href")
+                                        ?: parser.getAttributeValue("http://www.w3.org/1999/xlink", "href")
+                                        ?: ""
+                                    if (href.isNotEmpty() && !href.startsWith("data:")) {
+                                        val resolved = resolveRelativePath(chapterDir, href)
+                                        nodes.add(ContentNode.Image(resolved))
+                                    }
+                                }
+                            }
+                            // 見出し要素。中身は通常の textBuffer ではなく、headingBuffer に
+                            // 集約して、閉じタグのときに Heading ノードとして吐く。
+                            // 直前に PageBreak を置くことで、章タイトル・節タイトルが
+                            // 必ずページ先頭に来るようにする (本文と混在させない)。
+                            "h1", "h2", "h3", "h4", "h5", "h6" -> {
                                 flushText()
-                                // SVG内の <image xlink:href="..." /> (namespace-aware=false のため
-                                // 属性名は "xlink:href" の literal で引く)
-                                val href = parser.getAttributeValue(null, "href")
-                                    ?: parser.getAttributeValue(null, "xlink:href")
-                                    ?: parser.getAttributeValue("http://www.w3.org/1999/xlink", "href")
-                                    ?: ""
-                                if (href.isNotEmpty() && !href.startsWith("data:")) {
-                                    val resolved = resolveRelativePath(chapterDir, href)
-                                    nodes.add(ContentNode.Image(resolved))
+                                if (headingLevel == 0) {
+                                    nodes.add(ContentNode.PageBreak)
+                                    headingLevel = (name[1].digitToIntOrNull() ?: 1).coerceIn(1, 6)
+                                    headingBuffer.setLength(0)
                                 }
                             }
                             // div / section / article は semantic には grouping 用途であり
                             // 段落区切りに使うと、<div>駒</div><div>形</div>... のような
                             // 1文字ずつ装飾目的で div 化された EPUB が各文字独立カラムに
-                            // なってしまう。段落扱いは p / 見出し / 箇条書き等に限定する。
-                            "p", "h1", "h2", "h3", "h4", "h5", "h6",
-                            "li", "blockquote", "pre" -> {
-                                emitParaBreak()
+                            // なってしまう。段落扱いは p / 箇条書き等に限定する。
+                            "p", "li", "blockquote", "pre" -> {
+                                if (headingLevel == 0) emitParaBreak()
                             }
                         }
                     }
@@ -125,8 +147,27 @@ class ContentExtractor {
                             }
                             "rt" -> inRt = false
                             "rp" -> inRp = false
-                            "p", "h1", "h2", "h3", "h4", "h5", "h6" -> {
-                                emitParaBreak()
+                            "h1", "h2", "h3", "h4", "h5", "h6" -> {
+                                if (headingLevel > 0) {
+                                    // headingBuffer からフラッシュ相当の正規化を掛けて Heading に。
+                                    val raw = headingBuffer.toString()
+                                        .replace(Regex("[\\u0009\\u000A\\u000D]+"), "")
+                                        .replace(Regex(" +"), " ")
+                                        .replace(Regex("(?<=[^\\x00-\\x7E]) | (?=[^\\x00-\\x7E])"), "")
+                                        .trim()
+                                    if (raw.isNotEmpty()) {
+                                        nodes.add(ContentNode.Heading(raw, headingLevel))
+                                    }
+                                    headingBuffer.setLength(0)
+                                    headingLevel = 0
+                                    // 見出しの後は段落扱いで次カラムへ (次の <p> との間を空ける)
+                                    if (nodes.isNotEmpty() && nodes.last() !is ContentNode.ParaBreak) {
+                                        nodes.add(ContentNode.ParaBreak)
+                                    }
+                                }
+                            }
+                            "p" -> {
+                                if (headingLevel == 0) emitParaBreak()
                             }
                         }
                     }
@@ -135,6 +176,9 @@ class ContentExtractor {
                             // <script>/<style>/<head> 内はスキップ
                         } else if (inRt || inRp) {
                             // ルビのよみがな (<rt>) / 括弧 (<rp>) は表示しない
+                        } else if (headingLevel > 0) {
+                            // 見出しは別バッファへ
+                            headingBuffer.append(parser.text ?: "")
                         } else {
                             textBuffer.append(parser.text ?: "")
                         }
@@ -147,8 +191,10 @@ class ContentExtractor {
         }
 
         flushText()
-        // 末尾の冗長 ParaBreak を落とす
-        while (nodes.isNotEmpty() && nodes.last() is ContentNode.ParaBreak) {
+        // 末尾の冗長 ParaBreak / PageBreak を落とす
+        while (nodes.isNotEmpty() &&
+            (nodes.last() is ContentNode.ParaBreak || nodes.last() is ContentNode.PageBreak)
+        ) {
             nodes.removeAt(nodes.size - 1)
         }
         return nodes

@@ -26,6 +26,8 @@ data class PositionedGlyph(
     val y: Float,           // 描画原点 Y (ベースライン)
     val rotated: Boolean,   // 90度時計回り回転が必要か (Latin等)
     val isRuby: Boolean,    // ルビ小文字として描画するか
+    val sizeScale: Float = 1.0f, // フォントサイズ倍率 (見出しで 1.0 より大)
+    val bold: Boolean = false,   // 明示的に太字で描画するか (見出し)
 )
 
 data class PositionedImage(
@@ -314,6 +316,58 @@ class VerticalLayoutEngine(
                     }
                     pendingParaIndent = false
                 }
+                is ContentNode.PageBreak -> {
+                    // 強制改ページ。既に何か出力されているときのみ現ページを確定し、
+                    // まだ1文字も出していない状態では無視する (先頭で空ページ防止)。
+                    if (currentGlyphs.isNotEmpty() || currentImages.isNotEmpty()) {
+                        pages.add(Page(currentGlyphs, currentImages))
+                        currentGlyphs = mutableListOf()
+                        currentImages = mutableListOf()
+                        colIndex = 0
+                        rowY = firstRowBaseline
+                        isFirstGlyphOfColumn = true
+                    }
+                    pendingParaIndent = false
+                }
+                is ContentNode.Heading -> {
+                    // 見出し: 本文より大きく・太字で描画する専用行。
+                    // 必ずカラム先頭から開始する (途中から見出しが始まるのは避ける)。
+                    if (!isFirstGlyphOfColumn) {
+                        startNewColumn()
+                    }
+                    val scale = headingScale(node.level)
+                    val headingAdvance = advance * scale
+                    // 拡大字のem-box下端でオーバーフロー判定するための係数
+                    val scaledDescent = fm.descent * scale
+                    val textChars = node.text.filter { it != '\n' && it != '\r' && it != '\t' }
+                    for (rawCh in textChars) {
+                        val ch = normalizeForVertical(rawCh)
+                        // 次の1文字が今のカラムに収まらなければカラム折返し
+                        if (rowY + scaledDescent > bottomEdge) {
+                            startNewColumn()
+                        }
+                        val rotated = needsRotation(ch)
+                        val cx = currentColumnCenterX()
+                        currentGlyphs.add(
+                            PositionedGlyph(
+                                text = ch.toString(),
+                                x = cx,
+                                y = rowY,
+                                rotated = rotated,
+                                isRuby = false,
+                                sizeScale = scale,
+                                bold = true,
+                            )
+                        )
+                        rowY += headingAdvance
+                        isFirstGlyphOfColumn = false
+                    }
+                    // 見出し直後は必ず次カラムへ回し、本文と同じカラムに続かないようにする。
+                    if (!isFirstGlyphOfColumn) {
+                        startNewColumn()
+                    }
+                    pendingParaIndent = false
+                }
             }
         }
 
@@ -324,6 +378,23 @@ class VerticalLayoutEngine(
             pages.add(Page(emptyList(), emptyList()))
         }
         return pages
+    }
+
+    /**
+     * 見出しレベルに対するフォントサイズ倍率。
+     *   h1 : 1.6倍  (巻頭・章タイトル)
+     *   h2 : 1.4倍  (章タイトル・節タイトル)
+     *   h3 : 1.25倍 (節タイトル)
+     *   h4〜h6 : 1.15倍 (小見出し)
+     *
+     * コラム幅は固定なので倍率を上げすぎると左右に食み出すが、
+     * 隣接カラムとのアキ (columnGapRatio + rubySize) に収まる範囲を経験的に選ぶ。
+     */
+    private fun headingScale(level: Int): Float = when (level.coerceIn(1, 6)) {
+        1 -> 1.6f
+        2 -> 1.4f
+        3 -> 1.25f
+        else -> 1.15f
     }
 
     /**

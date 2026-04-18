@@ -104,7 +104,11 @@ class EpubParser(private val context: Context) {
         while (parser.next() != XmlPullParser.END_DOCUMENT) {
             when (parser.eventType) {
                 XmlPullParser.START_TAG -> {
-                    when (parser.name) {
+                    // isNamespaceAware=false なので <dc:title> は "dc:title" として
+                    // 渡ってくる。Dublin Core 名前空間プレフィックスを剥がして
+                    // "title" / "creator" / "language" と比較する。
+                    val localName = parser.name?.substringAfter(':') ?: ""
+                    when (localName) {
                         "metadata" -> inMetadata = true
                         "title" -> if (inMetadata) currentTag = "title"
                         "creator" -> if (inMetadata) currentTag = "creator"
@@ -128,15 +132,20 @@ class EpubParser(private val context: Context) {
                     }
                 }
                 XmlPullParser.TEXT -> {
+                    val text = parser.text?.trim() ?: ""
+                    // 同じタグが複数回出現するケース (シリーズ名が <dc:title> として
+                    // 追加で並ぶ等) で、既に取得済みの値を空文字で上書きしないよう
+                    // isEmpty の時だけ代入する。
                     when (currentTag) {
-                        "title" -> title = parser.text?.trim() ?: ""
-                        "creator" -> author = parser.text?.trim() ?: ""
-                        "language" -> language = parser.text?.trim() ?: ""
+                        "title" -> if (title.isEmpty() && text.isNotEmpty()) title = text
+                        "creator" -> if (author.isEmpty() && text.isNotEmpty()) author = text
+                        "language" -> if (language.isEmpty() && text.isNotEmpty()) language = text
                     }
                 }
                 XmlPullParser.END_TAG -> {
-                    if (parser.name == "metadata") inMetadata = false
-                    if (parser.name in listOf("title", "creator", "language")) currentTag = ""
+                    val localName = parser.name?.substringAfter(':') ?: ""
+                    if (localName == "metadata") inMetadata = false
+                    if (localName in listOf("title", "creator", "language")) currentTag = ""
                 }
             }
         }
