@@ -14,8 +14,13 @@ sealed class ContentNode {
     /** ルビ: base の文字列に対し、ruby の文字列を振る。 */
     data class Ruby(val base: String, val ruby: String) : ContentNode()
 
-    /** 画像。chapterDir基準で解決済みの絶対パス。resources から引ける前提。 */
-    data class Image(val src: String) : ContentNode()
+    /**
+     * 画像。chapterDir基準で解決済みの絶対パス。resources から引ける前提。
+     * cssClass は <img class="..."> の値そのまま。日本の電子書籍は
+     * `gaiji` / `gaiji-line` / `gaiji-wide` 等の class で「文字相当の外字」と
+     * 「ページ図版」を区別している事が多いため、レイアウト判定に使う。
+     */
+    data class Image(val src: String, val cssClass: String = "") : ContentNode()
 
     /** 段落区切り (新しい行=縦書きでは新しいカラムを開始、行頭字下げあり)。 */
     object ParaBreak : ContentNode()

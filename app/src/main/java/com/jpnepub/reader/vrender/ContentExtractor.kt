@@ -102,11 +102,12 @@ class ContentExtractor {
                             }
                             "img" -> {
                                 val src = parser.getAttributeValue(null, "src") ?: ""
+                                val cssClass = parser.getAttributeValue(null, "class") ?: ""
                                 if (src.isNotEmpty() && !src.startsWith("data:")) {
                                     val resolved = resolveRelativePath(chapterDir, src)
                                     if (headingLevel == 0) {
                                         flushText()
-                                        nodes.add(ContentNode.Image(resolved))
+                                        nodes.add(ContentNode.Image(resolved, cssClass))
                                     } else {
                                         flushHeadingText()
                                         headingParts.add(ContentNode.HeadingPart.Image(resolved))
@@ -120,11 +121,12 @@ class ContentExtractor {
                                     ?: parser.getAttributeValue(null, "xlink:href")
                                     ?: parser.getAttributeValue("http://www.w3.org/1999/xlink", "href")
                                     ?: ""
+                                val cssClass = parser.getAttributeValue(null, "class") ?: ""
                                 if (href.isNotEmpty() && !href.startsWith("data:")) {
                                     val resolved = resolveRelativePath(chapterDir, href)
                                     if (headingLevel == 0) {
                                         flushText()
-                                        nodes.add(ContentNode.Image(resolved))
+                                        nodes.add(ContentNode.Image(resolved, cssClass))
                                     } else {
                                         flushHeadingText()
                                         headingParts.add(ContentNode.HeadingPart.Image(resolved))
