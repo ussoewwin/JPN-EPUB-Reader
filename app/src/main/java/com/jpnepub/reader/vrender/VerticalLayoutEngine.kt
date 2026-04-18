@@ -40,6 +40,14 @@ data class Page(
     val images: List<PositionedImage>,
 )
 
+/**
+ * 画像の用途分類。
+ *  GAIJI    … 文字相当の外字。本文中に em-box 大でインライン配置。
+ *  FULLPAGE … 表紙/扉/全面挿絵。本文領域いっぱいに収まる最大サイズで中央配置。
+ *  HALFPAGE … 本文挿絵。本文領域の縦横とも半分以内で中央配置。
+ */
+private enum class ImageClass { GAIJI, FULLPAGE, HALFPAGE }
+
 class VerticalLayoutEngine(
     private val pageW: Int,
     private val pageH: Int,
@@ -224,17 +232,50 @@ class VerticalLayoutEngine(
                     }
                 }
                 is ContentNode.Image -> {
-                    // 画像サイズを取得し、小さければ外字(gaiji/旧字)として本文中にインライン配置する。
-                    // 大きければ挿絵として全面1ページ扱い。
-                    val dims = imageSizeResolver(node.src)
-                    val isInlineGaiji = if (dims != null) {
-                        val (iw, ih) = dims
-                        // 閾値: どちらの辺も 256px 以下なら外字扱い。
-                        // 日本の電子書籍の外字画像は典型的に 24〜128px 四方。
-                        iw in 1..256 && ih in 1..256
-                    } else {
-                        false
+                    // 画像を 3 種に分類する:
+                    //   GAIJI    : 文字相当の外字 → 本文中に em-box でインライン
+                    //   FULLPAGE : 表紙/扉/全面図版 → ページ全面に拡大
+                    //   HALFPAGE : 本文挿絵       → ページ中央に半分以下で
+                    //
+                    // 判定の第一優先は <img class="..."> の値。日本の電子書籍
+                    //   publisher は gaiji / gaiji-line / gaiji-wide を文字大、
+                    //   pagefit / page80 / fit / cover / full を全面、
+                    //   inline / inline_01 / inline_001 を半分挿絵として
+                    //   申告している事が多い。
+                    //
+                    // 第二優先は寸法。class が無い (古い EPUB / 表紙の bare img 等)
+                    //   場合のフォールバックで、
+                    //     ・両辺 ≤ 64px        → 外字
+                    //     ・短辺 ≥ 600px     → 全面 (表紙級)
+                    //     ・それ以外             → 半分挿絵
+                    val tokens = node.cssClass.lowercase().split(Regex("\\s+"))
+                        .filter { it.isNotEmpty() }
+                    val isGaijiClass = tokens.any { it == "gaiji" || it.startsWith("gaiji-") }
+                    val isFullPageClass = tokens.any { t ->
+                        t == "fit" || t == "cover" || t == "full" ||
+                            t.startsWith("pagefit") || t.startsWith("page80") ||
+                            t.startsWith("page-") || t == "fullpage" || t == "full-page"
                     }
+                    val isHalfPageClass = tokens.any { t ->
+                        t == "inline" || t.startsWith("inline_") || t.startsWith("inline-")
+                    }
+                    val dims = imageSizeResolver(node.src)
+                    val classification = when {
+                        isGaijiClass -> ImageClass.GAIJI
+                        isFullPageClass -> ImageClass.FULLPAGE
+                        isHalfPageClass -> ImageClass.HALFPAGE
+                        dims != null -> {
+                            val (iw, ih) = dims
+                            val shortSide = minOf(iw, ih)
+                            when {
+                                iw in 1..64 && ih in 1..64 -> ImageClass.GAIJI
+                                shortSide >= 600 -> ImageClass.FULLPAGE
+                                else -> ImageClass.HALFPAGE
+                            }
+                        }
+                        else -> ImageClass.HALFPAGE
+                    }
+                    val isInlineGaiji = classification == ImageClass.GAIJI
 
                     if (isInlineGaiji) {
                         if (pendingParaIndent) {
@@ -244,7 +285,9 @@ class VerticalLayoutEngine(
                         if (rowY + fm.descent > bottomEdge) {
                             startNewColumn()
                         }
-                        val (iw, ih) = dims!!
+                        // class で gaiji 確定だが寸法が取れない場合は正方形扱い。
+                        val iw = dims?.first ?: 1
+                        val ih = dims?.second ?: 1
                         val cx = currentColumnCenterX()
                         // em-box に内接するサイズでアスペクト比を保つ。
                         // ほとんどの外字は正方形だが念のため。
@@ -275,7 +318,10 @@ class VerticalLayoutEngine(
                         )
                         advanceOneChar()
                     } else {
-                        // 大きい画像 = 挿絵/表紙 → 1ページまるごと
+                        // 挿絵 / 表紙: 1 枚で 1 ページを占有する。
+                        //   FULLPAGE → 本文領域いっぱいに収まる最大サイズで中央配置
+                        //   HALFPAGE → 本文領域の縦横とも半分以内で中央配置
+                        // どちらも元のアスペクト比は維持する。寸法不明時は正方形扱い。
                         if (currentGlyphs.isNotEmpty() || currentImages.isNotEmpty()) {
                             pages.add(Page(currentGlyphs, currentImages))
                             currentGlyphs = mutableListOf()
@@ -283,14 +329,31 @@ class VerticalLayoutEngine(
                             colIndex = 0
                             rowY = firstRowBaseline
                         }
+                        val areaW = rightEdge - leftEdge
+                        val areaH = bottomEdge - topEdge
+                        val scale = if (classification == ImageClass.FULLPAGE) 1.0f else 0.5f
+                        val maxW = areaW * scale
+                        val maxH = areaH * scale
+                        val (iw, ih) = dims ?: Pair(1, 1)
+                        val aspect = iw.toFloat() / ih.toFloat()
+                        var targetW = maxW
+                        var targetH = targetW / aspect
+                        if (targetH > maxH) {
+                            targetH = maxH
+                            targetW = targetH * aspect
+                        }
+                        val centerX = (leftEdge + rightEdge) / 2f
+                        val centerY = (topEdge + bottomEdge) / 2f
+                        val drawLeft = centerX - targetW / 2f
+                        val drawTop = centerY - targetH / 2f
                         currentImages.add(
                             PositionedImage(
                                 src = node.src,
                                 bounds = RectF(
-                                    leftEdge,
-                                    topEdge,
-                                    rightEdge,
-                                    bottomEdge
+                                    drawLeft,
+                                    drawTop,
+                                    drawLeft + targetW,
+                                    drawTop + targetH
                                 )
                             )
                         )
