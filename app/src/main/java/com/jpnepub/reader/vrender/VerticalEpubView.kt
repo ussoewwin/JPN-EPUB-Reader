@@ -309,6 +309,30 @@ class VerticalEpubView @JvmOverloads constructor(
 
     private fun drawGlyph(canvas: Canvas, g: PositionedGlyph) {
         val paint = if (g.isRuby) rubyPaint else mainPaint
+        // 見出し用の一時的サイズ・太字切替。復元を忘れるとページ全体に波及するので
+        // try/finally で必ず戻す。
+        val savedSize = paint.textSize
+        val savedFakeBold = paint.isFakeBoldText
+        var paintMutated = false
+        if (g.sizeScale != 1.0f) {
+            paint.textSize = savedSize * g.sizeScale
+            paintMutated = true
+        }
+        if (g.bold && !savedFakeBold) {
+            paint.isFakeBoldText = true
+            paintMutated = true
+        }
+        try {
+            drawGlyphCore(canvas, g, paint)
+        } finally {
+            if (paintMutated) {
+                paint.textSize = savedSize
+                paint.isFakeBoldText = savedFakeBold
+            }
+        }
+    }
+
+    private fun drawGlyphCore(canvas: Canvas, g: PositionedGlyph, paint: Paint) {
         if (g.rotated) {
             // 縦書き中で 90度時計回り描画する文字。
             //
