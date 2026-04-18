@@ -29,8 +29,22 @@ data class SpineItem(
 data class TocEntry(
     val title: String,
     val href: String,
-    val children: List<TocEntry> = emptyList()
+    val children: List<TocEntry> = emptyList(),
+    /**
+     * 章本文の <h*> から拾った「テキスト＋外字画像」断片列。
+     * NCX/nav に `〓` (代用記号) が入っている所を、本文側の外字画像で
+     * 正しく置き換えて目次に表示するための情報。
+     * 取得できなかった場合 null。
+     */
+    val titleParts: List<TitlePart>? = null,
 )
+
+/** 目次タイトルの断片。テキストと外字画像を順序付きで保持する。 */
+sealed class TitlePart {
+    data class Text(val text: String) : TitlePart()
+    /** 画像 src は EPUB ルートからの絶対パス (resources マップで解決可能)。 */
+    data class Image(val src: String) : TitlePart()
+}
 
 class EpubParser(private val context: Context) {
 
@@ -199,28 +213,171 @@ class EpubParser(private val context: Context) {
         opfDir: String,
         resources: Map<String, ByteArray>
     ): List<TocEntry> {
-        // Try EPUB3 nav first
-        for ((_, pair) in manifestItems) {
-            val (href, mediaType) = pair
-            if (mediaType == "application/xhtml+xml") {
-                val fullPath = resolveHref(opfDir, href)
-                val data = resources[fullPath] ?: continue
-                val text = decodeWithDetection(data)
-                if (text.contains("<nav") && text.contains("epub:type=\"toc\"")) {
-                    return parseNavToc(text, fullPath)
+        val baseEntries: List<TocEntry> = run {
+            // Try EPUB3 nav first
+            for ((_, pair) in manifestItems) {
+                val (href, mediaType) = pair
+                if (mediaType == "application/xhtml+xml") {
+                    val fullPath = resolveHref(opfDir, href)
+                    val data = resources[fullPath] ?: continue
+                    val text = decodeWithDetection(data)
+                    if (text.contains("<nav") && text.contains("epub:type=\"toc\"")) {
+                        return@run parseNavToc(text, fullPath)
+                    }
                 }
             }
+            // Fall back to EPUB2 NCX
+            val ncxEntry = manifestItems.entries.find {
+                it.value.second == "application/x-dtbncx+xml"
+            }
+            if (ncxEntry != null) {
+                val fullPath = resolveHref(opfDir, ncxEntry.value.first)
+                val data = resources[fullPath]
+                if (data != null) return@run parseNcxToc(data)
+            }
+            emptyList()
         }
 
-        // Fall back to EPUB2 NCX
-        val ncxEntry = manifestItems.entries.find { it.value.second == "application/x-dtbncx+xml" }
-        if (ncxEntry != null) {
-            val fullPath = resolveHref(opfDir, ncxEntry.value.first)
-            val data = resources[fullPath] ?: return emptyList()
-            return parseNcxToc(data)
+        // 各 TOC エントリの参照先 XHTML から実際の見出しを拾い、
+        // `〓` 等で潰れていた外字を画像断片として復元する。
+        return baseEntries.map { entry -> enrichTocEntryWithBodyHeading(entry, opfDir, resources) }
+    }
+
+    /**
+     * TOC エントリの href 先 XHTML を読み、最初の <h1>〜<h6> から
+     * テキストと外字画像の混在断片列を取り出して titleParts に詰める。
+     * 取得失敗時は元のエントリをそのまま返す。
+     */
+    private fun enrichTocEntryWithBodyHeading(
+        entry: TocEntry,
+        opfDir: String,
+        resources: Map<String, ByteArray>
+    ): TocEntry {
+        val hrefNoFrag = entry.href.substringBefore('#')
+        if (hrefNoFrag.isEmpty()) return entry
+        // hrefNoFrag は parseNavToc 内で resolveHref 済み (basePath基準)
+        // または NCX 内では opf 基準の相対。両方を試す。
+        val candidatePaths = listOf(
+            normalizePath(hrefNoFrag),
+            resolveHref(opfDir, hrefNoFrag),
+        )
+        val data = candidatePaths.asSequence().mapNotNull { resources[it] }.firstOrNull() ?: return entry
+        val xhtml = decodeWithDetection(data)
+        val chapterDir = (candidatePaths.firstOrNull { resources.containsKey(it) } ?: hrefNoFrag)
+            .substringBeforeLast('/', "")
+        val parts = extractFirstHeadingParts(xhtml, chapterDir) ?: return entry
+        if (parts.isEmpty()) return entry
+        // テキストだけを連結して plain title も差し替える (画像箇所は alt や空で詰める)。
+        val plainTitle = buildString {
+            for (p in parts) {
+                when (p) {
+                    is TitlePart.Text -> append(p.text)
+                    is TitlePart.Image -> { /* 画像は plain には出さない */ }
+                }
+            }
+        }.trim().ifEmpty { entry.title }
+        return entry.copy(title = plainTitle, titleParts = parts)
+    }
+
+    /**
+     * XHTML 文字列から最初の <h1>〜<h6> 要素を見つけ、その中身を
+     * TitlePart のリストにして返す。未発見なら null。
+     *
+     * 軽量実装: 完全な ContentExtractor ほどの正規化は不要 (見出し1行分の
+     * テキストと <img>/<image> の順序が取れれば十分)。
+     */
+    private fun extractFirstHeadingParts(xhtml: String, chapterDir: String): List<TitlePart>? {
+        val headingMatch = Regex("""<(h[1-6])\b[^>]*>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
+            .find(xhtml) ?: return null
+        val inner = headingMatch.groupValues[2]
+        val parts = mutableListOf<TitlePart>()
+        val textBuf = StringBuilder()
+
+        fun flushText() {
+            if (textBuf.isEmpty()) return
+            val t = textBuf.toString()
+                .replace(Regex("[\\u0009\\u000A\\u000D]+"), "")
+                .replace(Regex(" +"), " ")
+                .replace(Regex("(?<=[^\\x00-\\x7E]) | (?=[^\\x00-\\x7E])"), "")
+            if (t.isNotEmpty()) parts.add(TitlePart.Text(t))
+            textBuf.clear()
         }
 
-        return emptyList()
+        // タグ・実体参照を順次走査する単純パーサ。
+        // 対象タグ: <img>, <image> は画像断片化。<rt>/<rp> はルビなので捨てる。
+        // それ以外のタグは透過してテキストだけ拾う。
+        var i = 0
+        var skipDepth = 0      // <rt>/<rp> 内
+        val n = inner.length
+        while (i < n) {
+            val c = inner[i]
+            if (c == '<') {
+                val close = inner.indexOf('>', i)
+                if (close < 0) break
+                val tagBody = inner.substring(i + 1, close)
+                val isEnd = tagBody.startsWith("/")
+                val tagName = tagBody.removePrefix("/")
+                    .substringBefore(' ')
+                    .substringBefore('/')
+                    .substringBefore('\t')
+                    .substringBefore('\n')
+                    .lowercase()
+                when (tagName) {
+                    "img" -> {
+                        if (skipDepth == 0) {
+                            val src = Regex("""src\s*=\s*"([^"]*)"""").find(tagBody)?.groupValues?.get(1) ?: ""
+                            if (src.isNotEmpty() && !src.startsWith("data:")) {
+                                flushText()
+                                parts.add(TitlePart.Image(resolveRelativePath(chapterDir, src)))
+                            }
+                        }
+                    }
+                    "image" -> {
+                        if (skipDepth == 0) {
+                            val href = Regex("""(?:xlink:)?href\s*=\s*"([^"]*)"""")
+                                .find(tagBody)?.groupValues?.get(1) ?: ""
+                            if (href.isNotEmpty() && !href.startsWith("data:")) {
+                                flushText()
+                                parts.add(TitlePart.Image(resolveRelativePath(chapterDir, href)))
+                            }
+                        }
+                    }
+                    "rt", "rp" -> {
+                        if (isEnd) {
+                            if (skipDepth > 0) skipDepth--
+                        } else {
+                            // self-closing は無視
+                            if (!tagBody.endsWith("/")) skipDepth++
+                        }
+                    }
+                    // それ以外のタグは構造透過 (中のテキストは拾う)
+                    else -> { /* no-op */ }
+                }
+                i = close + 1
+            } else {
+                // skipDepth > 0 のときは <rt>/<rp> 内なので
+                // テキスト本体も丸ごと捨てる (ルビのよみがなを目次に出さない)
+                if (skipDepth == 0) {
+                    textBuf.append(c)
+                }
+                i++
+            }
+        }
+        flushText()
+        return if (parts.isEmpty()) null else parts
+    }
+
+    private fun resolveRelativePath(base: String, relative: String): String {
+        if (relative.startsWith("/")) return relative.removePrefix("/")
+        val parts = if (base.isEmpty()) mutableListOf() else base.split("/").toMutableList()
+        for (segment in relative.split("/")) {
+            when (segment) {
+                "." -> {}
+                ".." -> if (parts.isNotEmpty()) parts.removeAt(parts.lastIndex)
+                else -> parts.add(segment)
+            }
+        }
+        return parts.joinToString("/")
     }
 
     private fun parseNavToc(html: String, basePath: String): List<TocEntry> {
@@ -230,12 +387,33 @@ class EpubParser(private val context: Context) {
         val linkPattern = Regex("""<a[^>]+href="([^"]*)"[^>]*>([^<]*)</a>""")
         for (match in linkPattern.findAll(html)) {
             val href = resolveHref(baseDir, match.groupValues[1])
-            val title = match.groupValues[2].trim()
+            val title = sanitizeTocTitle(match.groupValues[2])
             if (title.isNotEmpty()) {
                 entries.add(TocEntry(title, href))
             }
         }
         return entries
+    }
+
+    /**
+     * 目次タイトルの正規化。
+     *
+     * 日本の電子書籍では、本文中の外字 (gaiji) <img> に対応する位置に
+     * NCX/nav 側で `〓` (U+3013 GETA MARK) や `■` (U+25A0 BLACK SQUARE) を
+     * 置いて「ここは活字に無い文字」と示す慣習がある。
+     * 表示上はただの黒い四角や横帯になり、ユーザーから見ると文字化けに
+     * 見えてしまうため、目次表示用にこれらを取り除く。
+     *
+     * 取り除いた結果として生じる連続する全角/半角スペースは 1 つに潰す。
+     */
+    private fun sanitizeTocTitle(raw: String): String {
+        if (raw.isEmpty()) return ""
+        val stripped = raw
+            .replace(Regex("[\u3013\u25A0]+"), "")  // 〓 / ■ を除去
+            .replace(Regex("\u3000+"), "\u3000")    // 連続する全角スペースを 1 つに
+            .replace(Regex(" +"), " ")              // 連続する半角スペースを 1 つに
+            .trim()
+        return stripped
     }
 
     private fun parseNcxToc(data: ByteArray): List<TocEntry> {
@@ -261,14 +439,15 @@ class EpubParser(private val context: Context) {
                     }
                 }
                 XmlPullParser.TEXT -> {
-                    if (inText) currentTitle = parser.text?.trim() ?: ""
+                    if (inText) currentTitle = parser.text ?: ""
                 }
                 XmlPullParser.END_TAG -> {
                     when (parser.name) {
                         "text" -> inText = false
                         "navPoint" -> {
-                            if (currentTitle.isNotEmpty()) {
-                                entries.add(TocEntry(currentTitle, currentHref))
+                            val cleaned = sanitizeTocTitle(currentTitle)
+                            if (cleaned.isNotEmpty()) {
+                                entries.add(TocEntry(cleaned, currentHref))
                             }
                             currentTitle = ""
                             currentHref = ""

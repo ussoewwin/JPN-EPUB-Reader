@@ -2,16 +2,27 @@ package com.jpnepub.reader.ui
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.os.SystemClock
+import android.text.Spannable
+import android.text.SpannableStringBuilder
+import android.text.style.ReplacementSpan
 import android.util.Log
 import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.ArrayAdapter
 import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
@@ -20,6 +31,7 @@ import com.jpnepub.reader.databinding.ActivityReaderBinding
 import com.jpnepub.reader.databinding.DialogSettingsBinding
 import com.jpnepub.reader.epub.EpubBook
 import com.jpnepub.reader.epub.EpubParser
+import com.jpnepub.reader.epub.TitlePart
 import com.jpnepub.reader.renderer.EpubRenderer
 import com.jpnepub.reader.renderer.ReaderConfig
 import com.jpnepub.reader.vrender.ContentExtractor
@@ -348,10 +360,40 @@ class ReaderActivity : AppCompatActivity() {
             Toast.makeText(this, "目次がありません", Toast.LENGTH_SHORT).show()
             return
         }
-        val titles = b.toc.map { it.title }.toTypedArray()
+        // 行内に外字画像 (gaiji) を表示できるよう SpannableStringBuilder を使う。
+        // 行高に合わせて画像を等倍縮小する ImageSpan を組み立てる。
+        // リストアイテムの実フォントサイズ (px) を一度測ってから本文と同じ大きさで
+        // 外字画像を生成する。simple_list_item_1 のテキストサイズは端末・テーマで
+        // 変わるため、一度 dummy TextView を作って実測する。
+        val measureTv = TextView(this).apply {
+            setTextAppearance(android.R.style.TextAppearance_Material_Subhead)
+        }
+        val itemTextPx = measureTv.textSize.toInt().coerceAtLeast(
+            TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics
+            ).toInt()
+        )
+        val titles: List<CharSequence> = b.toc.map { entry ->
+            buildTocTitleSpannable(b, entry, itemTextPx)
+        }
+        val adapter = object : ArrayAdapter<CharSequence>(
+            this,
+            android.R.layout.simple_list_item_1,
+            android.R.id.text1,
+            titles
+        ) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val v = super.getView(position, convertView, parent)
+                (v.findViewById<TextView>(android.R.id.text1))?.apply {
+                    setLineSpacing(0f, 1.15f)
+                    text = titles[position]
+                }
+                return v
+            }
+        }
         AlertDialog.Builder(this)
             .setTitle(R.string.toc)
-            .setItems(titles) { _, which ->
+            .setAdapter(adapter) { _, which ->
                 val href = b.toc[which].href.substringBefore('#')
                 val idx = b.spine.indexOfFirst {
                     it.href == href || it.href.endsWith(href)
@@ -362,6 +404,117 @@ class ReaderActivity : AppCompatActivity() {
                 if (barsVisible) toggleBars()
             }
             .show()
+    }
+
+    /**
+     * TOC エントリの「テキスト＋外字画像」断片列を、CenteredImageSpan を埋め込んだ
+     * SpannableStringBuilder に組み立てる。titleParts が無いエントリは
+     * 単純なテキストにフォールバックする。
+     *
+     * 画像は実テキストサイズ (px) を 1em として、em-box に内接する正方形に縮小する。
+     * 描画は CenteredImageSpan によりテキストの x-height 中心に画像中心が来るよう
+     * 調整され、和文 1 文字とほぼ同じ大きさ・位置に並ぶ。
+     */
+    private fun buildTocTitleSpannable(
+        book: EpubBook,
+        entry: com.jpnepub.reader.epub.TocEntry,
+        emPx: Int,
+    ): CharSequence {
+        val parts = entry.titleParts ?: return entry.title
+        val sb = SpannableStringBuilder()
+
+        for (part in parts) {
+            when (part) {
+                is TitlePart.Text -> sb.append(part.text)
+                is TitlePart.Image -> {
+                    val drawable = loadGaijiDrawable(book, part.src, emPx)
+                    if (drawable != null) {
+                        val placeholderStart = sb.length
+                        sb.append("\uFFFC")
+                        sb.setSpan(
+                            CenteredImageSpan(drawable),
+                            placeholderStart,
+                            sb.length,
+                            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                    }
+                }
+            }
+        }
+        return if (sb.isNotEmpty()) sb else entry.title
+    }
+
+    /**
+     * 外字画像を 1 文字分 (em × em) に縮小した Drawable を返す。
+     * resources マップに無い場合は null。
+     */
+    private fun loadGaijiDrawable(book: EpubBook, src: String, emPx: Int): Drawable? {
+        val bytes = book.resources[src] ?: return null
+        val bmp = try {
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (_: Throwable) {
+            null
+        } ?: return null
+        val w = bmp.width.coerceAtLeast(1)
+        val h = bmp.height.coerceAtLeast(1)
+        val scale = minOf(emPx.toFloat() / w, emPx.toFloat() / h)
+        val drawW = (w * scale).toInt().coerceAtLeast(1)
+        val drawH = (h * scale).toInt().coerceAtLeast(1)
+        return BitmapDrawable(resources, bmp).apply {
+            setBounds(0, 0, drawW, drawH)
+        }
+    }
+
+    /**
+     * 画像をテキスト行の垂直中心 (ascent と descent の中間) に揃える ReplacementSpan。
+     * 標準の ImageSpan(ALIGN_BASELINE/BOTTOM) は和文中心で見ると
+     * 画像が上にはみ出したり下に詰まったりして並びが崩れるので、
+     * 行ボックスの中央に置くことで「1 文字相当」として違和感なく並ぶ。
+     */
+    private class CenteredImageSpan(private val drawable: Drawable) : ReplacementSpan() {
+        override fun getSize(
+            paint: Paint,
+            text: CharSequence?,
+            start: Int,
+            end: Int,
+            fm: Paint.FontMetricsInt?
+        ): Int {
+            val rect = drawable.bounds
+            if (fm != null) {
+                val metrics = paint.fontMetricsInt
+                val textTop = metrics.ascent
+                val textBottom = metrics.descent
+                val textCenter = (textTop + textBottom) / 2
+                val half = rect.height() / 2
+                fm.ascent = minOf(textTop, textCenter - half)
+                fm.descent = maxOf(textBottom, textCenter + half)
+                fm.top = fm.ascent
+                fm.bottom = fm.descent
+            }
+            return rect.width()
+        }
+
+        override fun draw(
+            canvas: Canvas,
+            text: CharSequence?,
+            start: Int,
+            end: Int,
+            x: Float,
+            top: Int,
+            y: Int,
+            bottom: Int,
+            paint: Paint
+        ) {
+            // y はテキストベースライン
+            val metrics = paint.fontMetricsInt
+            val textCenter = y + (metrics.ascent + metrics.descent) / 2
+            val half = drawable.bounds.height() / 2
+            val transY = textCenter - half
+            canvas.save()
+            canvas.translate(x, transY.toFloat())
+            drawable.draw(canvas)
+            canvas.restore()
+        }
     }
 
     private fun showSettingsDialog() {
