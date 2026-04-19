@@ -20,6 +20,29 @@ import java.io.StringReader
  */
 class ContentExtractor {
 
+    /**
+     * [flushText] / [flushHeadingText] 直前のテキストを正規化する。
+     *
+     * - タグ整形由来の改行・CJK 隣接の半角スペースは従来どおり除去。
+     * - ひらがな・カタカナ・漢字どうしのあいだの全角スペース (U+3000) や欧文スペースは、
+     *   縦組みで 1 字分の空列に見えるため除去する (横組用トラッキングの残り)。
+     * - 複合ルビを `</ruby> <ruby>` のように分割した XHTML では、字のあいだに
+     *   半角スペースだけが単独で [TextRun] 化することがあり、それも同様に空列になる。
+     *   → [isNotBlank] でそのようなランを捨てるのと、先頭末尾の半角スペースを削る。
+     */
+    private fun sanitizeExtractedText(raw: String): String {
+        var s = raw
+            .replace(Regex("[\\u0009\\u000A\\u000D]+"), "")
+            .replace(Regex(" +"), " ")
+            .replace(Regex("(?<=[^\\x00-\\x7E]) | (?=[^\\x00-\\x7E])"), "")
+        s = s.replace(INTRA_CJK_SPACE_RE, "")
+        var start = 0
+        var end = s.length
+        while (start < end && s[start] == ' ') start++
+        while (end > start && s[end - 1] == ' ') end--
+        return if (start == 0 && end == s.length) s else s.substring(start, end)
+    }
+
     fun extract(xhtml: String, chapterDir: String): List<ContentNode> {
         val nodes = mutableListOf<ContentNode>()
 
@@ -43,28 +66,17 @@ class ContentExtractor {
 
         fun flushHeadingText() {
             if (headingBuffer.isEmpty()) return
-            val t = headingBuffer.toString()
-                .replace(Regex("[\\u0009\\u000A\\u000D]+"), "")
-                .replace(Regex(" +"), " ")
-                .replace(Regex("(?<=[^\\x00-\\x7E]) | (?=[^\\x00-\\x7E])"), "")
-            if (t.isNotEmpty()) headingParts.add(ContentNode.HeadingPart.Text(t))
+            val t = sanitizeExtractedText(headingBuffer.toString())
+            // ルビを複数 <ruby> に分割したあいだの整形空白だけが残る TextRun は
+            // 縦組みで 1 字分の空列に見えるので捨てる。
+            if (t.isNotBlank()) headingParts.add(ContentNode.HeadingPart.Text(t))
             headingBuffer.setLength(0)
         }
 
         fun flushText() {
             if (textBuffer.isEmpty()) return
-            // 1) 制御空白 (tab/CR/LF) を除去。
-            //    XML 整形由来の \n は表示意図がない。
-            // 2) 連続する半角スペースを 1 つに潰す。
-            // 3) 非 ASCII (= CJK・日本語句読点・全角) の隣にある半角スペースを除去。
-            //    EPUB の XHTML では <img/> や <ruby>...</ruby> の前後にタグ整形用の
-            //    改行・インデントが頻出するが、その部分は視覚的に空白を入れる意図が
-            //    ない。英字同士の " " は本来の単語区切りなので残す。
-            val t = textBuffer.toString()
-                .replace(Regex("[\\u0009\\u000A\\u000D]+"), "")
-                .replace(Regex(" +"), " ")
-                .replace(Regex("(?<=[^\\x00-\\x7E]) | (?=[^\\x00-\\x7E])"), "")
-            if (t.isNotEmpty()) nodes.add(ContentNode.TextRun(t))
+            val t = sanitizeExtractedText(textBuffer.toString())
+            if (t.isNotBlank()) nodes.add(ContentNode.TextRun(t))
             textBuffer.clear()
         }
 
@@ -257,6 +269,15 @@ class ContentExtractor {
     }
 
     companion object {
+        /**
+         * ひらがな・カタカナ・CJK 統合・拡張A の字と字のあいだだけに挟まる空白を除去する。
+         */
+        private val INTRA_CJK_SPACE_RE = Regex(
+            "(?<=[\\u3040-\\u309f\\u30a0-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff])" +
+                "[\\u0020\\u00a0\\u2000-\\u200a\\u202f\\u205f\\u3000]+" +
+                "(?=[\\u3040-\\u309f\\u30a0-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff])"
+        )
+
         /**
          * EPUB の spine アイテム data (ByteArray) からテキストを抽出する便利関数。
          */
