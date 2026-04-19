@@ -4,6 +4,38 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.04
+
+### ContentExtractor — do not strip intentional U+3000 between CJK
+
+- **Regression (from v1.03):** `INTRA_CJK_SPACE_RE` originally included
+  **U+3000** in the character class to remove. That also removed
+  publisher-intended ideographic space between a chapter label and title
+  (e.g. `第十三章　金田…` on an in-book TOC page built from
+  `<span>第十三章</span><span>　金田…</span>`), so the line looked
+  **cramped** with no gap after `章`.
+- **Fix:** The pattern now removes only **ASCII space, NBSP, and
+  U+2000–U+200A / U+202F / U+205F** between CJK characters — **not U+3000**.
+  Split-ruby orphan `TextRun` removal, ASCII edge trimming, and other
+  v1.03 behaviour are unchanged.
+
+### Vertical typesetter — upright Latin (A–Z / a–z) in tategaki
+
+- Half-width Latin letters were classified by `needsRotation` and drawn
+  rotated 90°, which looked wrong next to vertical Japanese.
+- **Fix:** `normalizeForVertical` now maps **A–Z** and **a–z** to
+  full-width Latin (U+FF21–FF3A / U+FF41–FF5A), same idea as half-width
+  digits → full-width digits. Ruby **base** text now runs through
+  `normalizeForVertical` as well so Latin in `<ruby>` bases matches body
+  text.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
+app/src/main/java/com/jpnepub/reader/vrender/VerticalLayoutEngine.kt
+```
+
 ## v1.03
 
 ### Vertical typesetter — remove spurious one-character gaps (split ruby & CJK spacing)
