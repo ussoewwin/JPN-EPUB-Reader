@@ -67,9 +67,10 @@ app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
 ### Vertical typesetter — illustration scale (gaiji vs cover vs body art)
 
 - **Problem:** All small bitmaps were treated as inline gaiji whenever
-  both sides were ≤ 256 px. Publisher illustrations such as
-  `class="inline_01"` (e.g. 76 × 128 px in Kadokawa EPUBs) were shrunk to
-  a single em-box and looked like a tiny stamp next to the text.
+  both sides were ≤ 256 px. Illustrations marked `class="inline_01"`
+  (e.g. tall narrow plates around 76 × 128 px in some commercial EPUBs)
+  were shrunk to a single em-box and looked like a tiny stamp next to the
+  text.
 - **Fix:** `ContentNode.Image` now carries the `<img>` / SVG `<image>`
   `class` attribute (`cssClass`). `VerticalLayoutEngine` classifies each
   image into **GAIJI** (character-sized inline), **FULLPAGE** (cover /
@@ -161,8 +162,8 @@ app/src/main/java/com/jpnepub/reader/vrender/VerticalLayoutEngine.kt
   size sitting on the same baseline rather than floating above the
   line or collapsing into a tiny square.
 - `<rt>` / `<rp>` content is filtered out while extracting the body
-  heading, so ruby readings such as "あき" / "こ" never leak into the
-  TOC entry.
+  heading, so phonetic text from ruby markup never leaks into the TOC
+  entry.
 
 ### Files touched
 
