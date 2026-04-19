@@ -185,7 +185,8 @@ class VerticalLayoutEngine(
                     }
                     val baseStartY = rowY
                     // 基字を置く (必要なら途中でカラム折返し)
-                    for (ch in base) {
+                    for (raw in base) {
+                        val ch = normalizeForVertical(raw)
                         if (rowY + fm.descent > bottomEdge) {
                             startNewColumn()
                         }
@@ -518,14 +519,17 @@ class VerticalLayoutEngine(
      * 半角 → 全角への縦書き向け正規化。
      *
      *   0-9           -> ０-９  (U+FF10-FF19)
-     *   ! " # ... ~ (ASCII 印字) のうち、縦書き時に全角で並べた方が自然なもの
-     *     (! ? % など) も全角化。しかし英字 (A-Z a-z) は縦中では横倒しの方が
-     *     一般的なので変換しない。
+     *   A-Z / a-z     -> Ａ-Ｚ / ａ-ｚ  (U+FF21-FF3A / U+FF41-FF5A)
+     *     半角のままだと [needsRotation] で 90° 回転し、縦組みで横倒しに見える。
+     *     全角英字は vert で正立しやすい。
+     *   ! ? %         -> 全角約物 (! ? %)
      */
     private fun normalizeForVertical(ch: Char): Char {
         val code = ch.code
         return when (code) {
             in 0x30..0x39 -> (code - 0x30 + 0xFF10).toChar()   // 0-9 → ０-９
+            in 0x41..0x5A -> (code - 0x41 + 0xFF21).toChar()   // A-Z → Ａ-Ｚ
+            in 0x61..0x7A -> (code - 0x61 + 0xFF41).toChar()   // a-z → ａ-ｚ
             0x21 -> '！'  // !
             0x3F -> '？'  // ?
             0x25 -> '％'  // %
@@ -535,7 +539,8 @@ class VerticalLayoutEngine(
 
     /**
      * 縦書き時に90度回転して描画すべき文字か判定する。
-     *   - ASCII 英数字・ASCII記号 → 回転
+     *   - [normalizeForVertical] 後も残る ASCII 記号・半角カナ → 回転
+     *   - 英字・数字は正規化で全角化するため通常ここに来ない
      *   - 半角カタカナ → 回転 (そもそも縦書きでは全角推奨)
      *   - 全角・CJK・かな → 回転しない (本来の縦書き字形で描画)
      *   - 三点リーダ・二点リーダ・ダッシュ・波ダッシュ等、
