@@ -570,7 +570,7 @@ class VerticalLayoutEngine(
             0xFF5E, // ～ FULLWIDTH TILDE
             0xFF0D, // － FULLWIDTH HYPHEN-MINUS
             0x2500, // ─ BOX DRAWINGS LIGHT HORIZONTAL
-                    //   (金田一耕助ファイル等で em dash 代わりに多用される)
+                    //   (一部の商業 EPUB で em dash 代わりに多用される)
             0x2501, // ━ BOX DRAWINGS HEAVY HORIZONTAL
             0x2010, // ‐ HYPHEN
             0x2011, // ‑ NON-BREAKING HYPHEN
