@@ -4,6 +4,31 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.03
+
+### Vertical typesetter — remove spurious one-character gaps (split ruby & CJK spacing)
+
+- **Problem:** In some EPUBs, compound words are split across **multiple
+  adjacent `<ruby>` blocks** (one kanji per block with its reading). The
+  XHTML pretty-printing between `</ruby>` and `<ruby>` leaves a newline
+  and/or spaces that become their own `TextRun`. In vertical layout that
+  looks like an extra **blank column** between characters (e.g. 咸 and 陽,
+  or 函 / 谷 / 関). Separately, **full-width spaces (U+3000)** or narrow
+  Unicode spaces inserted between CJK characters for horizontal tracking
+  also appeared as one-character gaps when read vertically.
+- **Fix:** `ContentExtractor.sanitizeExtractedText()` now (1) strips spaces
+  that sit **only between** hiragana/katakana/CJK ideographs, (2) trims
+  leading/trailing **ASCII** spaces from each flushed segment (paragraph
+  indent `U+3000` is preserved), and (3) **does not emit** `TextRun`s that
+  are blank after normalization — so orphan runs that were only
+  formatting glue between split-ruby tags are dropped.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
+```
+
 ## v1.02
 
 ### Vertical typesetter — illustration scale (gaiji vs cover vs body art)
