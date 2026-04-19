@@ -11,8 +11,8 @@ semantic-version guarantees yet.
 - **Regression (from v1.03):** `INTRA_CJK_SPACE_RE` originally included
   **U+3000** in the character class to remove. That also removed
   publisher-intended ideographic space between a chapter label and title
-  (e.g. `第十三章　金田…` on an in-book TOC page built from
-  `<span>第十三章</span><span>　金田…</span>`), so the line looked
+  (e.g. `第五章　見出し…` on an in-book TOC page built from
+  `<span>第五章</span><span>　見出し…</span>`), so the line looked
   **cramped** with no gap after `章`.
 - **Fix:** The pattern now removes only **ASCII space, NBSP, and
   U+2000–U+200A / U+202F / U+205F** between CJK characters — **not U+3000**.
@@ -44,8 +44,9 @@ app/src/main/java/com/jpnepub/reader/vrender/VerticalLayoutEngine.kt
   adjacent `<ruby>` blocks** (one kanji per block with its reading). The
   XHTML pretty-printing between `</ruby>` and `<ruby>` leaves a newline
   and/or spaces that become their own `TextRun`. In vertical layout that
-  looks like an extra **blank column** between characters (e.g. 咸 and 陽,
-  or 函 / 谷 / 関). Separately, **full-width spaces (U+3000)** or narrow
+  looks like an extra **blank column** between characters when a compound
+  is split across multiple `<ruby>` blocks with junk whitespace between
+  closing and opening tags. Separately, **full-width spaces (U+3000)** or narrow
   Unicode spaces inserted between CJK characters for horizontal tracking
   also appeared as one-character gaps when read vertically.
 - **Fix:** `ContentExtractor.sanitizeExtractedText()` now (1) strips spaces
