@@ -4,6 +4,40 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.05
+
+### EpubParser — table of contents wrong when one XHTML has many `#fragment` entries
+
+- **Symptom:** Settings → Table of contents showed the **same title many
+  times** (or the wrong chapter name) when the navigation document listed
+  many entries that all pointed into **one** XHTML spine item with different
+  `#fragment` anchors (typical of older bundled-volume EPUBs).
+- **Root cause:** `enrichTocEntryWithBodyHeading` ignored the fragment and
+  always took the **first** `<h1>`–`<h6>` in that file, so every entry sharing
+  the file inherited that one heading.
+- **Fix:** If `href` contains `#` and the NCX/nav **title is already
+  non-blank**, skip body-based enrichment and keep the navigation title.
+
+### ContentExtractor — parenthesized footnote numbers in body text
+
+- **Symptom:** Inline markers like full-width `(10)`, `(11)` appeared in the
+  middle of paragraphs when the publisher wrapped footnote backlinks in
+  `<a href="...#chushaku_N">…</a>` (or similar).
+- **Root cause:** Anchor inner text was treated as normal prose; this reader
+  does not resolve those jumps, so the markers read as noise.
+- **Fix:** Treat EPUB3 `noteref` anchors (`epub:type`, `role`) and common
+  footnote fragment prefixes (`chushaku`, `chu_`, `fn`, `note_`, …) as
+  **footnote references** and omit text and images inside those `<a>`
+  elements. In-book TOC links (`#link_NNN`, etc.) are **not** matched and stay
+  visible.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
+app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
+```
+
 ## v1.04
 
 ### ContentExtractor — do not strip intentional U+3000 between CJK

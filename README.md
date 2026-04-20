@@ -120,7 +120,7 @@ app/src/main/java/com/jpnepub/reader/
 ## Changelog
 
 See [`md/changelog.md`](md/changelog.md) for the full release history.
-The most recent release is **v1.04**.
+The most recent release is **v1.05**.
 
 ## License
 
