@@ -247,12 +247,24 @@ class EpubParser(private val context: Context) {
      * TOC エントリの href 先 XHTML を読み、最初の <h1>〜<h6> から
      * テキストと外字画像の混在断片列を取り出して titleParts に詰める。
      * 取得失敗時は元のエントリをそのまま返す。
+     *
+     * 注意: `entry.href` に `#fragment` が付いている場合、同じ XHTML の
+     *   中に複数章が並んでいる形式 (例: `text00008.html#link_004`,
+     *   `text00008.html#link_005`, ...) である。fragment を無視して
+     *   XHTML の先頭 h* を使うと、その XHTML を共有する全エントリが
+     *   同じ見出しに化けるので、fragment 付きで NCX/nav 側のタイトルが
+     *   既に空でないなら差し替えを行わない (NCX を信頼)。
+     *   これで本来の章タイトルが保たれる。
      */
     private fun enrichTocEntryWithBodyHeading(
         entry: TocEntry,
         opfDir: String,
         resources: Map<String, ByteArray>
     ): TocEntry {
+        val hasFragment = entry.href.contains('#')
+        if (hasFragment && entry.title.isNotBlank()) {
+            return entry
+        }
         val hrefNoFrag = entry.href.substringBefore('#')
         if (hrefNoFrag.isEmpty()) return entry
         // hrefNoFrag は parseNavToc 内で resolveHref 済み (basePath基準)
