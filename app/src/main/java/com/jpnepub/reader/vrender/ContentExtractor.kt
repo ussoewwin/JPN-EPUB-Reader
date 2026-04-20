@@ -57,6 +57,14 @@ class ContentExtractor {
         // ルビは表示しない方針。<rt>/<rp> の内容だけは破棄したいので、そこだけフラグ管理する。
         var inRt = false
         var inRp = false
+        // 脚注参照リンク (例: <a href="text00018.html#chushaku_013">（13）</a>) は
+        // 読み手がジャンプできない本リーダーでは単なるノイズなので、その <a> 配下の
+        // テキスト・画像をまるごと捨てる。
+        // 本の中の目次ページ (<a href="text00005.html#link_002">はしがき</a>) は
+        // 本文として残したいので、フラグメント名・epub:type・role で区別する。
+        // HTML では <a> のネストは許されないため、通常はスタック深さ 0 か 1。
+        val anchorFootnoteStack = ArrayDeque<Boolean>()
+        var footnoteAnchorDepth = 0
         // 見出し収集: <h1>〜<h6> の中身は、通常の本文 TextRun とは別に貯めて
         // <hN> 終了時に Heading ノードとして1回だけ吐く。ネストは想定しない。
         // テキスト断片と画像 (gaiji) 断片を順序保持で集める。
@@ -112,10 +120,20 @@ class ContentExtractor {
                                 }
                                 // 見出し内の <br> は単に無視 (1行の見出しとして整形)
                             }
+                            "a" -> {
+                                val href = parser.getAttributeValue(null, "href") ?: ""
+                                val epubType = parser.getAttributeValue(null, "epub:type")
+                                    ?: parser.getAttributeValue("http://www.idpf.org/2007/ops", "type")
+                                    ?: ""
+                                val role = parser.getAttributeValue(null, "role") ?: ""
+                                val isFootnote = isFootnoteRefAnchor(href, epubType, role)
+                                anchorFootnoteStack.addLast(isFootnote)
+                                if (isFootnote) footnoteAnchorDepth++
+                            }
                             "img" -> {
                                 val src = parser.getAttributeValue(null, "src") ?: ""
                                 val cssClass = parser.getAttributeValue(null, "class") ?: ""
-                                if (src.isNotEmpty() && !src.startsWith("data:")) {
+                                if (footnoteAnchorDepth == 0 && src.isNotEmpty() && !src.startsWith("data:")) {
                                     val resolved = resolveRelativePath(chapterDir, src)
                                     if (headingLevel == 0) {
                                         flushText()
@@ -134,7 +152,7 @@ class ContentExtractor {
                                     ?: parser.getAttributeValue("http://www.w3.org/1999/xlink", "href")
                                     ?: ""
                                 val cssClass = parser.getAttributeValue(null, "class") ?: ""
-                                if (href.isNotEmpty() && !href.startsWith("data:")) {
+                                if (footnoteAnchorDepth == 0 && href.isNotEmpty() && !href.startsWith("data:")) {
                                     val resolved = resolveRelativePath(chapterDir, href)
                                     if (headingLevel == 0) {
                                         flushText()
@@ -180,6 +198,14 @@ class ContentExtractor {
                             }
                             "rt" -> inRt = false
                             "rp" -> inRp = false
+                            "a" -> {
+                                if (anchorFootnoteStack.isNotEmpty()) {
+                                    val wasFootnote = anchorFootnoteStack.removeLast()
+                                    if (wasFootnote && footnoteAnchorDepth > 0) {
+                                        footnoteAnchorDepth--
+                                    }
+                                }
+                            }
                             "h1", "h2", "h3", "h4", "h5", "h6" -> {
                                 if (headingLevel > 0) {
                                     // 残テキストを断片化してから Heading を吐く。
@@ -209,6 +235,8 @@ class ContentExtractor {
                     XmlPullParser.TEXT -> {
                         if (skipDepth > 0) {
                             // <script>/<style>/<head> 内はスキップ
+                        } else if (footnoteAnchorDepth > 0) {
+                            // 脚注参照リンクの中身 ("（13）" など) は捨てる
                         } else if (inRt || inRp) {
                             // ルビのよみがな (<rt>) / 括弧 (<rp>) は表示しない
                         } else if (headingLevel > 0) {
@@ -253,6 +281,41 @@ class ContentExtractor {
             parser.setFeature("http://xmlpull.org/v1/doc/features.html#relaxed", true)
         } catch (_: Exception) { }
         return parser
+    }
+
+    /**
+     * その `<a>` が脚注・注釈への参照リンクかどうかを判定する。
+     *
+     * 判定基準:
+     *  - EPUB3 の `epub:type="noteref"` / `role="doc-noteref"` は標準どおり noteref とみなす。
+     *  - それ以外は `href` のフラグメント (#以降) が、日本語 EPUB でよく使われる
+     *    脚注アンカーの命名規則で始まっていれば noteref とみなす
+     *    (`chushaku_*`, `chu_*`, `fn*`, `note_*`, `footnote*`, `endnote*` ほか)。
+     *  - 本の中の目次ページが章タイトルをラップする `<a href="...#link_NNN">` は
+     *    この命名規則に当たらないので、本文として残る。
+     */
+    private fun isFootnoteRefAnchor(href: String, epubType: String, role: String): Boolean {
+        if (epubType.contains("noteref", ignoreCase = true)) return true
+        if (role.contains("doc-noteref", ignoreCase = true)) return true
+        val hashIdx = href.indexOf('#')
+        if (hashIdx < 0) return false
+        val frag = href.substring(hashIdx + 1).lowercase()
+        if (frag.isEmpty()) return false
+        return frag.startsWith("chushaku") ||
+            frag.startsWith("chu_") ||
+            frag.startsWith("chu-") ||
+            frag.startsWith("fn_") ||
+            frag.startsWith("fn-") ||
+            (frag.startsWith("fn") && frag.length >= 3 && frag[2].isDigit()) ||
+            frag.startsWith("footnote") ||
+            frag.startsWith("endnote") ||
+            frag.startsWith("note_") ||
+            frag.startsWith("note-") ||
+            frag.startsWith("noteref") ||
+            frag.startsWith("rfn_") ||
+            frag.startsWith("rfn-") ||
+            frag.startsWith("nt_") ||
+            frag.startsWith("nt-")
     }
 
     private fun resolveRelativePath(base: String, relative: String): String {
