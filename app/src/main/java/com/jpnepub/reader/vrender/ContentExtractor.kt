@@ -95,12 +95,29 @@ class ContentExtractor {
             }
         }
 
+        /** `id` / `xml:id` のどちらでもアンカーを拾う (EPUB3 XHTML の慣習差吸収)。 */
+        fun readElementId(p: XmlPullParser): String {
+            p.getAttributeValue(null, "id")?.takeIf { it.isNotEmpty() }?.let { return it }
+            p.getAttributeValue("http://www.w3.org/XML/1998/namespace", "id")
+                ?.takeIf { it.isNotEmpty() }?.let { return it }
+            p.getAttributeValue(null, "xml:id")?.takeIf { it.isNotEmpty() }?.let { return it }
+            return ""
+        }
+
         try {
             var event = parser.eventType
             while (event != XmlPullParser.END_DOCUMENT) {
                 when (event) {
                     XmlPullParser.START_TAG -> {
                         val name = parser.name?.lowercase() ?: ""
+                        // 全ての開始タグで `id="..."` をアンカーマーカーとして記録する。
+                        // TOC の `#fragment` 付きリンクから章内の正しいページへ
+                        // ジャンプするためのランドマーク。0 幅なのでレイアウトには影響しない。
+                        val elemId = readElementId(parser)
+                        if (elemId.isNotEmpty() && skipDepth == 0 && footnoteAnchorDepth == 0) {
+                            flushText()
+                            nodes.add(ContentNode.Anchor(elemId))
+                        }
                         when (name) {
                             "script", "style", "head" -> skipDepth++
                             "ruby" -> {

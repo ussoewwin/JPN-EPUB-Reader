@@ -9,6 +9,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.LocaleList
+import android.net.Uri
 import android.util.AttributeSet
 import android.view.View
 import java.util.Locale
@@ -91,8 +92,11 @@ class VerticalEpubView @JvmOverloads constructor(
     // --- 状態 ---
     private var content: List<ContentNode> = emptyList()
     private var pages: List<Page> = emptyList()
+    private var anchorPages: Map<String, Int> = emptyMap()
     private var currentPage: Int = 0
     private var imageResolver: (String) -> ByteArray? = { null }
+    // setChapter で指定された `#fragment`。relayout 直後に該当ページへ飛ぶために保持。
+    private var pendingAnchorId: String? = null
     // 画像ピクセル寸法キャッシュ。外字(gaiji)判定でレイアウト時に頻繁に問い合わせが入るため。
     private val imageSizeCache = HashMap<String, Pair<Int, Int>?>()
 
@@ -170,18 +174,27 @@ class VerticalEpubView @JvmOverloads constructor(
      * チャプターのコンテンツを差し替え、先頭ページに戻す。
      * startFromEnd=true のとき、ページネーション後に最終ページを表示する。
      */
+    // 「初期ジャンプ先」は relayout() 時に解決する。
+    // setChapter はフラグと pendingAnchorId をセットするだけで、実際のページ
+    // 決定は最初に pages が組み上がった relayout で行う。view 幅が 0 の状態で
+    // setChapter された場合 (onSizeChanged 前) でも後から正しく飛ぶようにする。
+    private var pendingStartFromEndInternal: Boolean = false
+
     fun setChapter(
         content: List<ContentNode>,
         imageResolver: (String) -> ByteArray?,
         startFromEnd: Boolean = false,
+        targetAnchorId: String? = null,
     ) {
         this.content = content
         this.imageResolver = imageResolver
+        this.pendingAnchorId = targetAnchorId?.takeIf { it.isNotEmpty() }
+        this.pendingStartFromEndInternal = startFromEnd && pendingAnchorId == null
         imageSizeCache.clear()
+        // 一旦 0 に戻す (relayout がページを組み終えた時点で pending が消化されて上書きされる)
+        currentPage = 0
         relayout()
-        currentPage = if (startFromEnd && pages.isNotEmpty()) pages.size - 1 else 0
         invalidate()
-        onPageChanged?.invoke(currentPage, pages.size.coerceAtLeast(1))
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -194,6 +207,9 @@ class VerticalEpubView @JvmOverloads constructor(
         val h = height
         if (w <= 0 || h <= 0) {
             pages = emptyList()
+            // 直前の章の anchor マップが残ると、次の onSizeChanged で
+            // 誤ったページへ飛ぶ原因になる。
+            anchorPages = emptyMap()
             return
         }
         val engine = VerticalLayoutEngine(
@@ -208,8 +224,28 @@ class VerticalEpubView @JvmOverloads constructor(
             lineHeightRatio = lineHeightRatio,
             imageSizeResolver = { src -> resolveImageSize(src) },
         )
-        pages = engine.layout(content)
-        if (currentPage >= pages.size) currentPage = (pages.size - 1).coerceAtLeast(0)
+        val result = engine.layout(content)
+        pages = result.pages
+        anchorPages = result.anchors
+        // 保留中の初期ジャンプを消化する (setChapter 経由で受け渡された anchorId or startFromEnd)
+        val anchorIdSnapshot = pendingAnchorId
+        if (anchorIdSnapshot != null && pages.isNotEmpty()) {
+            val p = lookupAnchorPage(anchorIdSnapshot)
+            if (p != null) {
+                currentPage = p.coerceIn(0, pages.size - 1)
+                pendingAnchorId = null
+                pendingStartFromEndInternal = false
+            } else {
+                // 見つからなかった。無限に保留し続けるのは危険なので 1 回きりで諦める。
+                pendingAnchorId = null
+                currentPage = 0
+            }
+        } else if (pendingStartFromEndInternal && pages.isNotEmpty()) {
+            currentPage = pages.size - 1
+            pendingStartFromEndInternal = false
+        } else if (currentPage >= pages.size) {
+            currentPage = (pages.size - 1).coerceAtLeast(0)
+        }
         onPageChanged?.invoke(currentPage, pages.size.coerceAtLeast(1))
     }
 
@@ -408,5 +444,31 @@ class VerticalEpubView @JvmOverloads constructor(
         currentPage = page.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
         invalidate()
         onPageChanged?.invoke(currentPage, pages.size.coerceAtLeast(1))
+    }
+
+    /**
+     * `id="..."` 属性 (XHTML フラグメント) の示すページへジャンプ。
+     * 該当アンカーが無ければ false を返して何もしない。
+     */
+    /**
+     * TOC のフラグメントと XHTML の id / xml:id の表記ゆれ (空白・%エンコード) を吸収する。
+     */
+    private fun lookupAnchorPage(id: String): Int? {
+        if (id.isEmpty()) return null
+        anchorPages[id]?.let { return it }
+        val trimmed = id.trim()
+        if (trimmed != id) anchorPages[trimmed]?.let { return it }
+        val decoded = Uri.decode(id)
+        if (decoded != id) anchorPages[decoded]?.let { return it }
+        val decTrim = decoded.trim()
+        if (decTrim != decoded) anchorPages[decTrim]?.let { return it }
+        return null
+    }
+
+    fun jumpToAnchor(anchorId: String): Boolean {
+        if (anchorId.isEmpty()) return false
+        val page = lookupAnchorPage(anchorId) ?: return false
+        jumpToPage(page)
+        return true
     }
 }

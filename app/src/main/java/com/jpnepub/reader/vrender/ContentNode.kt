@@ -51,4 +51,12 @@ sealed class ContentNode {
         data class Text(val text: String) : HeadingPart()
         data class Image(val src: String) : HeadingPart()
     }
+
+    /**
+     * アンカー (`<foo id="...">` の id) を指すマーカー。
+     * 組版上は 0 幅で、直後に続くコンテンツが載るページを記録するために使う。
+     * `VerticalLayoutEngine.layout()` はアンカー id → ページ番号の
+     * マップを返し、`#fragment` 付きリンクから該当ページに直接ジャンプできる。
+     */
+    data class Anchor(val id: String) : ContentNode()
 }
