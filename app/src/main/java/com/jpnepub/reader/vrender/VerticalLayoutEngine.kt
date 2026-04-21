@@ -41,6 +41,15 @@ data class Page(
 )
 
 /**
+ * 組版結果。ページ列に加えて、アンカー id → そのアンカー以降のコンテンツが
+ * 最初に現れるページ index のマップを持つ。`#fragment` ジャンプに使う。
+ */
+data class LayoutResult(
+    val pages: List<Page>,
+    val anchors: Map<String, Int>,
+)
+
+/**
  * 画像の用途分類。
  *  GAIJI    … 文字相当の外字。本文中に em-box 大でインライン配置。
  *  FULLPAGE … 表紙/扉/全面挿絵。本文領域いっぱいに収まる最大サイズで中央配置。
@@ -70,10 +79,13 @@ class VerticalLayoutEngine(
     private val imageSizeResolver: (String) -> Pair<Int, Int>? = { null },
 ) {
 
-    fun layout(content: List<ContentNode>): List<Page> {
+    fun layout(content: List<ContentNode>): LayoutResult {
         val pages = mutableListOf<Page>()
+        val anchors = HashMap<String, Int>()
         val fontSize = paint.textSize
-        if (fontSize <= 0f || pageW <= 0 || pageH <= 0) return emptyList()
+        if (fontSize <= 0f || pageW <= 0 || pageH <= 0) {
+            return LayoutResult(emptyList(), emptyMap())
+        }
 
         val rubySize = rubyPaint.textSize
         val advance = fontSize * lineHeightRatio                // 1文字進む量
@@ -133,6 +145,18 @@ class VerticalLayoutEngine(
 
         var pendingParaIndent = false
 
+        // アンカーは 0 幅のため、直後に現れる最初のコンテンツが載るページを
+        // 記録したい。`pending` に積んで、次の glyph/image 投入時に解決する。
+        val pendingAnchorIds = mutableListOf<String>()
+        fun resolvePendingAnchors() {
+            if (pendingAnchorIds.isEmpty()) return
+            val idx = pages.size
+            for (id in pendingAnchorIds) {
+                if (id !in anchors) anchors[id] = idx
+            }
+            pendingAnchorIds.clear()
+        }
+
         for (node in content) {
             when (node) {
                 is ContentNode.TextRun -> {
@@ -162,6 +186,7 @@ class VerticalLayoutEngine(
                         }
                         val rotated = needsRotation(ch)
                         val cx = currentColumnCenterX()
+                        resolvePendingAnchors()
                         currentGlyphs.add(
                             PositionedGlyph(
                                 text = ch.toString(),
@@ -191,6 +216,7 @@ class VerticalLayoutEngine(
                             startNewColumn()
                         }
                         val cx = currentColumnCenterX()
+                        resolvePendingAnchors()
                         currentGlyphs.add(
                             PositionedGlyph(
                                 text = ch.toString(),
@@ -306,6 +332,7 @@ class VerticalLayoutEngine(
                         val cellTop = rowY - ascent
                         val drawLeft = cx - targetW / 2f
                         val drawTop = cellTop + (fontSize - targetH) / 2f
+                        resolvePendingAnchors()
                         currentImages.add(
                             PositionedImage(
                                 src = node.src,
@@ -347,6 +374,7 @@ class VerticalLayoutEngine(
                         val centerY = (topEdge + bottomEdge) / 2f
                         val drawLeft = centerX - targetW / 2f
                         val drawTop = centerY - targetH / 2f
+                        resolvePendingAnchors()
                         currentImages.add(
                             PositionedImage(
                                 src = node.src,
@@ -380,6 +408,11 @@ class VerticalLayoutEngine(
                     }
                     pendingParaIndent = false
                 }
+                is ContentNode.Anchor -> {
+                    // 0 幅マーカー。実際のページ index は、後続の最初の
+                    // glyph/image を配置した時点で確定させる。
+                    if (node.id.isNotEmpty()) pendingAnchorIds.add(node.id)
+                }
                 is ContentNode.PageBreak -> {
                     // 強制改ページ。既に何か出力されているときのみ現ページを確定し、
                     // まだ1文字も出していない状態では無視する (先頭で空ページ防止)。
@@ -412,6 +445,7 @@ class VerticalLayoutEngine(
                         }
                         val rotated = needsRotation(ch)
                         val cx = currentColumnCenterX()
+                        resolvePendingAnchors()
                         currentGlyphs.add(
                             PositionedGlyph(
                                 text = ch.toString(),
@@ -452,6 +486,7 @@ class VerticalLayoutEngine(
                         val cellTop = rowY - scaledAscent
                         val drawLeft = cx - targetW / 2f
                         val drawTop = cellTop + (scaledFont - targetH) / 2f
+                        resolvePendingAnchors()
                         currentImages.add(
                             PositionedImage(
                                 src = src,
@@ -489,13 +524,34 @@ class VerticalLayoutEngine(
             }
         }
 
+        // 直後に可視グリフが無いアンカー (空見出し等) は、現在組み立て中のページ
+        // または最終確定ページに紐づける。
+        if (pendingAnchorIds.isNotEmpty()) {
+            val targetIdx = when {
+                currentGlyphs.isNotEmpty() || currentImages.isNotEmpty() -> pages.size
+                pages.isNotEmpty() -> pages.size - 1
+                else -> 0
+            }
+            for (aid in pendingAnchorIds) {
+                if (aid !in anchors) anchors[aid] = targetIdx
+            }
+            pendingAnchorIds.clear()
+        }
+
         if (currentGlyphs.isNotEmpty() || currentImages.isNotEmpty()) {
             pages.add(Page(currentGlyphs, currentImages))
         }
         if (pages.isEmpty()) {
             pages.add(Page(emptyList(), emptyList()))
         }
-        return pages
+        // 最終ページ以降を指していたアンカーを最終ページに丸める
+        if (anchors.isNotEmpty()) {
+            val lastIdx = pages.size - 1
+            val fixed = HashMap<String, Int>(anchors.size)
+            for ((k, v) in anchors) fixed[k] = v.coerceAtMost(lastIdx).coerceAtLeast(0)
+            return LayoutResult(pages, fixed)
+        }
+        return LayoutResult(pages, emptyMap())
     }
 
     /**

@@ -2,6 +2,7 @@ package com.jpnepub.reader.ui
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.net.Uri
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -287,7 +288,7 @@ class ReaderActivity : AppCompatActivity() {
         binding.btnSettings.setOnClickListener { showSettingsDialog() }
     }
 
-    private fun loadChapter(index: Int) {
+    private fun loadChapter(index: Int, anchorId: String? = null) {
         val b = book ?: return
         if (index < 0 || index >= b.spine.size) return
 
@@ -295,13 +296,13 @@ class ReaderActivity : AppCompatActivity() {
         binding.progressBar.visibility = View.VISIBLE
 
         if (useNativeVertical) {
-            loadChapterNative(index, b)
+            loadChapterNative(index, b, anchorId)
         } else {
             loadChapterWebView(index)
         }
     }
 
-    private fun loadChapterNative(index: Int, b: EpubBook) {
+    private fun loadChapterNative(index: Int, b: EpubBook, anchorId: String?) {
         val spineItem = b.spine[index]
         val chapterDir = spineItem.href.substringBeforeLast('/', "")
         val startFromEnd = pendingStartFromEnd
@@ -316,6 +317,7 @@ class ReaderActivity : AppCompatActivity() {
                 content = nodes,
                 imageResolver = { path -> b.resources[path] },
                 startFromEnd = startFromEnd,
+                targetAnchorId = anchorId,
             )
             binding.progressBar.visibility = View.GONE
         }
@@ -373,8 +375,11 @@ class ReaderActivity : AppCompatActivity() {
                 TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics
             ).toInt()
         )
-        val titles: List<CharSequence> = b.toc.map { entry ->
-            buildTocTitleSpannable(b, entry, itemTextPx)
+        // 親 → 子の木構造を深さ優先で平坦化。
+        // 子は 1 段全角スペースでインデントする。
+        val flat = flattenToc(b.toc)
+        val titles: List<CharSequence> = flat.map { (entry, depth) ->
+            buildTocTitleSpannable(b, entry, itemTextPx, depth)
         }
         val adapter = object : ArrayAdapter<CharSequence>(
             this,
@@ -394,16 +399,39 @@ class ReaderActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(R.string.toc)
             .setAdapter(adapter) { _, which ->
-                val href = b.toc[which].href.substringBefore('#')
+                val fullHref = flat[which].first.href
+                val href = fullHref.substringBefore('#')
+                val fragment = if (fullHref.contains('#')) {
+                    fullHref.substringAfter('#').takeIf { it.isNotEmpty() }?.let { raw ->
+                        Uri.decode(raw).trim().takeIf { it.isNotEmpty() }
+                    }
+                } else null
                 val idx = b.spine.indexOfFirst {
                     it.href == href || it.href.endsWith(href)
                 }
-                if (idx >= 0) loadChapter(idx)
+                if (idx >= 0) loadChapter(idx, anchorId = fragment)
             }
             .setOnDismissListener {
                 if (barsVisible) toggleBars()
             }
             .show()
+    }
+
+    /**
+     * TOC の木を深さ優先で平坦化し、(エントリ, 深さ) の列にする。
+     * 深さはダイアログ表示時のインデント段数として使う。
+     */
+    private fun flattenToc(
+        entries: List<com.jpnepub.reader.epub.TocEntry>,
+        depth: Int = 0,
+        out: MutableList<Pair<com.jpnepub.reader.epub.TocEntry, Int>> =
+            mutableListOf(),
+    ): List<Pair<com.jpnepub.reader.epub.TocEntry, Int>> {
+        for (e in entries) {
+            out.add(e to depth)
+            if (e.children.isNotEmpty()) flattenToc(e.children, depth + 1, out)
+        }
+        return out
     }
 
     /**
@@ -419,9 +447,15 @@ class ReaderActivity : AppCompatActivity() {
         book: EpubBook,
         entry: com.jpnepub.reader.epub.TocEntry,
         emPx: Int,
+        depth: Int = 0,
     ): CharSequence {
-        val parts = entry.titleParts ?: return entry.title
+        val indent = if (depth > 0) "\u3000".repeat(depth) else ""
+        val parts = entry.titleParts
+        if (parts == null) {
+            return if (indent.isEmpty()) entry.title else indent + entry.title
+        }
         val sb = SpannableStringBuilder()
+        if (indent.isNotEmpty()) sb.append(indent)
 
         for (part in parts) {
             when (part) {
@@ -441,7 +475,7 @@ class ReaderActivity : AppCompatActivity() {
                 }
             }
         }
-        return if (sb.isNotEmpty()) sb else entry.title
+        return if (sb.isNotEmpty()) sb else (indent + entry.title)
     }
 
     /**

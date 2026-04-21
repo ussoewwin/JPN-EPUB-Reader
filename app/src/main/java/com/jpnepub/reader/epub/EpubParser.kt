@@ -173,7 +173,7 @@ class EpubParser(private val context: Context) {
         val isVertical = pageProgressionDirection == "rtl" ||
             detectVerticalWriting(spine, resources)
 
-        val toc = parseToc(manifestItems, opfDir, resources)
+        val toc = parseToc(manifestItems, opfDir, resources, spine)
 
         return EpubBook(
             title = title.ifEmpty { "無題" },
@@ -211,7 +211,8 @@ class EpubParser(private val context: Context) {
     private fun parseToc(
         manifestItems: Map<String, Pair<String, String>>,
         opfDir: String,
-        resources: Map<String, ByteArray>
+        resources: Map<String, ByteArray>,
+        spine: List<SpineItem>,
     ): List<TocEntry> {
         val baseEntries: List<TocEntry> = run {
             // Try EPUB3 nav first
@@ -240,7 +241,11 @@ class EpubParser(private val context: Context) {
 
         // 各 TOC エントリの参照先 XHTML から実際の見出しを拾い、
         // `〓` 等で潰れていた外字を画像断片として復元する。
-        return baseEntries.map { entry -> enrichTocEntryWithBodyHeading(entry, opfDir, resources) }
+        val enriched = baseEntries.map { enrichTocEntryWithBodyHeading(it, opfDir, resources) }
+        // NCX/nav が平坦で「部」だけを列挙しているが、本文に小タイトルが
+        // 独自スタイルで埋め込まれている EPUB (Kadokawa など) のために、
+        // 各エントリの間の spine を走査して小見出しを拾い、children に詰める。
+        return attachSubheadingChildren(enriched, spine, resources)
     }
 
     /**
@@ -302,6 +307,16 @@ class EpubParser(private val context: Context) {
         val headingMatch = Regex("""<(h[1-6])\b[^>]*>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
             .find(xhtml) ?: return null
         val inner = headingMatch.groupValues[2]
+        return parseHeadingInner(inner, chapterDir)
+    }
+
+    /**
+     * `<h*>` や `<span>` の innerHTML を走査して TitlePart のリストに変換する。
+     * - `<img>` / `<image>` は画像断片化。
+     * - `<rt>` / `<rp>` (ルビのよみがな) は中身ごと破棄。
+     * - それ以外のタグは構造透過。
+     */
+    private fun parseHeadingInner(inner: String, chapterDir: String): List<TitlePart>? {
         val parts = mutableListOf<TitlePart>()
         val textBuf = StringBuilder()
 
@@ -315,9 +330,6 @@ class EpubParser(private val context: Context) {
             textBuf.clear()
         }
 
-        // タグ・実体参照を順次走査する単純パーサ。
-        // 対象タグ: <img>, <image> は画像断片化。<rt>/<rp> はルビなので捨てる。
-        // それ以外のタグは透過してテキストだけ拾う。
         var i = 0
         var skipDepth = 0      // <rt>/<rp> 内
         val n = inner.length
@@ -358,17 +370,13 @@ class EpubParser(private val context: Context) {
                         if (isEnd) {
                             if (skipDepth > 0) skipDepth--
                         } else {
-                            // self-closing は無視
                             if (!tagBody.endsWith("/")) skipDepth++
                         }
                     }
-                    // それ以外のタグは構造透過 (中のテキストは拾う)
-                    else -> { /* no-op */ }
+                    else -> { /* 構造透過 */ }
                 }
                 i = close + 1
             } else {
-                // skipDepth > 0 のときは <rt>/<rp> 内なので
-                // テキスト本体も丸ごと捨てる (ルビのよみがなを目次に出さない)
                 if (skipDepth == 0) {
                     textBuf.append(c)
                 }
@@ -377,6 +385,284 @@ class EpubParser(private val context: Context) {
         }
         flushText()
         return if (parts.isEmpty()) null else parts
+    }
+
+    private data class RawSubheading(
+        val plainTitle: String,
+        val parts: List<TitlePart>,
+        val fragId: String,
+    )
+
+    /**
+     * 平坦な TOC に、対応する spine 区間の XHTML 内の小見出しを children として
+     * 付ける。
+     *
+     * 小見出しの検出対象:
+     *   (a) 親に使われていない `<h1>`〜`<h6>` 要素 (id 一致で除外)。
+     *   (b) Kadokawa 等の商業 EPUB 慣習である
+     *       `<p>…<span class="font-1emNN">…</span>…</p>` パターン。
+     *       NN は `font-1emNN` クラスの数字で、1.15em〜1.49em の範囲のもののみ
+     *       採用する (1.50em 以上は「部」クラスの大見出しで既に親が持っている)。
+     *
+     * 走査範囲: entry の href が指す spine ファイルから、次の entry の
+     * href が指す spine ファイルの直前まで (最大 MAX_SUBHEADING_SCAN_FILES 件)。
+     *
+     * パフォーマンス対策:
+     *   - 各ファイルについて、ICU4J でデコードする前に**バイト列のまま**に
+     *     `font-1em`・`<h1..6` のいずれも含まないか高速判定し、該当しなければ
+     *     その spine ファイルはスキップする (ICU4J 検出と正規表現スキャンを
+     *     丸ごと省ける)。
+     *   - spine 件数が多い EPUB でもエントリあたりの走査ファイル数を
+     *     MAX_SUBHEADING_SCAN_FILES に制限する。
+     */
+    private fun attachSubheadingChildren(
+        entries: List<TocEntry>,
+        spine: List<SpineItem>,
+        resources: Map<String, ByteArray>,
+    ): List<TocEntry> {
+        if (entries.size < 2 || spine.isEmpty()) return entries
+
+        fun matchSpineIdx(rawHref: String): Int {
+            val file = rawHref.substringBefore('#')
+            if (file.isEmpty()) return -1
+            return spine.indexOfFirst { it.href == file || it.href.endsWith(file) }
+        }
+
+        // NCX/nav が同じ XHTML ファイルを `#fragment` で既に何度も指している
+        // (= そのファイルの中の章はすでに TOC に全部載っている) なら、
+        // そのファイルに対して小見出しを探しに行く必要はない。
+        // 江戸川乱歩全集のような合本形式では 1 ファイルに 10〜20 の
+        // NCX エントリがぶら下がっているため、これを外すと決定的に重い。
+        val spineUsage = HashMap<String, Int>()
+        for (e in entries) {
+            val spIdx = matchSpineIdx(e.href)
+            if (spIdx >= 0) {
+                val h = spine[spIdx].href
+                spineUsage[h] = (spineUsage[h] ?: 0) + 1
+            }
+        }
+
+        // 同じ spine ファイルを複数エントリが走査区間に入れる場合があるので、
+        // デコード + 正規表現スキャン結果をファイル単位で memoize する。
+        val scanCache = HashMap<String, List<RawSubheading>>()
+        fun scanOrCached(sp: SpineItem): List<RawSubheading> {
+            scanCache[sp.href]?.let { return it }
+            val data = resources[sp.href] ?: return emptyList<RawSubheading>().also {
+                scanCache[sp.href] = it
+            }
+            if (!bytesMightContainSubheading(data)) {
+                return emptyList<RawSubheading>().also { scanCache[sp.href] = it }
+            }
+            val xhtml = decodeWithDetection(data)
+            val chapterDir = sp.href.substringBeforeLast('/', "")
+            val result = findSubheadingsInXhtml(xhtml, chapterDir)
+            scanCache[sp.href] = result
+            return result
+        }
+
+        val result = mutableListOf<TocEntry>()
+        for (i in entries.indices) {
+            val entry = entries[i]
+            val nextEntry = entries.getOrNull(i + 1)
+            val startIdx = matchSpineIdx(entry.href)
+            // 走査範囲の上限 endIdx は以下で決める:
+            //   - 次エントリが別ファイルを指す: 次エントリのファイルまで (その直前まで走査)
+            //   - 次エントリが同じファイルを指す / 次エントリが無い / 前に戻る:
+            //     このエントリの自ファイルだけを見る。遠方のファイルを覗きに行くと、
+            //     巻末「自作解説」等の無関係な見出しを全部の子にぶら下げる事故になる。
+            val nextStartIdx = nextEntry?.let { matchSpineIdx(it.href) } ?: -1
+            val endIdxRaw = if (nextStartIdx > startIdx) nextStartIdx else startIdx + 1
+            val endIdx = minOf(endIdxRaw, startIdx + MAX_SUBHEADING_SCAN_FILES)
+
+            if (startIdx < 0 || startIdx >= spine.size) {
+                result.add(entry)
+                continue
+            }
+
+            val parentFragId = entry.href.substringAfter('#', "")
+            val subs = mutableListOf<TocEntry>()
+            for (idx in startIdx until endIdx) {
+                val sp = spine[idx]
+                // NCX 側が既にこのファイルを複数回 fragment で分割していれば、
+                // 本文を改めて走査せず NCX を信頼する (合本対策)。
+                if ((spineUsage[sp.href] ?: 0) >= 2) continue
+                val skipFragId = if (idx == startIdx) parentFragId else ""
+                val cached = scanOrCached(sp)
+                for (sub in cached) {
+                    if (skipFragId.isNotEmpty() && sub.fragId == skipFragId) continue
+                    if (sub.plainTitle.trim() == entry.title.trim()) continue
+                    val prev = subs.lastOrNull()
+                    if (prev != null &&
+                        prev.title == sub.plainTitle &&
+                        prev.href == sp.href) continue
+                    val childHref = if (sub.fragId.isNotEmpty()) {
+                        "${sp.href}#${sub.fragId}"
+                    } else sp.href
+                    subs.add(
+                        TocEntry(
+                            title = sub.plainTitle,
+                            href = childHref,
+                            titleParts = sub.parts,
+                        )
+                    )
+                }
+            }
+            result.add(if (subs.isNotEmpty()) entry.copy(children = subs) else entry)
+        }
+        return result
+    }
+
+    /**
+     * spine ファイルのバイト列に小見出し候補 (`font-1em`, `<h1>`〜`<h6>`) が
+     * いずれも含まれなければ true を返さない。ASCII スライドで十分で、
+     * UTF-8 / Shift_JIS / EUC-JP いずれでもこれらのリテラルは同じ 1 バイト列で
+     * 出現するためデコード前でよい。
+     */
+    private fun bytesMightContainSubheading(data: ByteArray): Boolean {
+        if (indexOfAscii(data, "font-1em") >= 0) return true
+        for (lvl in '1'..'6') {
+            if (indexOfAscii(data, "<h$lvl") >= 0) return true
+            if (indexOfAscii(data, "<H$lvl") >= 0) return true
+        }
+        return false
+    }
+
+    private fun indexOfAscii(haystack: ByteArray, needle: String): Int {
+        if (needle.isEmpty()) return 0
+        val n = needle.length
+        val h = haystack.size
+        if (h < n) return -1
+        val first = needle[0].code.toByte()
+        var i = 0
+        while (i <= h - n) {
+            if (haystack[i] == first) {
+                var ok = true
+                var j = 1
+                while (j < n) {
+                    if (haystack[i + j] != needle[j].code.toByte()) { ok = false; break }
+                    j++
+                }
+                if (ok) return i
+            }
+            i++
+        }
+        return -1
+    }
+
+    /**
+     * XHTML 全体を 1 回だけ走査して、取りうる小見出し候補をすべて返す。
+     * 親 TOC エントリとの突き合わせ (id スキップ・重複除去) は呼び側で行う。
+     * 結果は `attachSubheadingChildren` の `scanCache` で memoize される。
+     */
+    private fun findSubheadingsInXhtml(
+        xhtml: String,
+        chapterDir: String,
+    ): List<RawSubheading> {
+        val out = mutableListOf<RawSubheading>()
+        val seen = HashSet<String>()
+
+        // 本の中の「目次ページ」は `<p><a href="..."><span class="font-1emNN">タイトル</span></a></p>`
+        // のように、本物の章 h タグと見分けが付かないことがある。そこから小見出しを拾うと、
+        // 子エントリ全部が「目次ページ自身」へのリンクに化けて、タップしても正しい章へ飛ばない。
+        // 判定ヒントとして:
+        //   1. `<body class="p-toc">` / "p-mokuji" / "p-contents" のような body クラス
+        //   2. `<body>` 内の `<a href="...">` のうち `#fragment` 付きリンクが 4 本以上ある、
+        //      かつ半数以上が「今読んでいるファイル以外」を指している
+        // のどちらかに該当すれば、このファイルからの小見出し抽出は丸ごと諦める。
+        val bodyClassRe = Regex("""<body\b[^>]*class\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+        val bodyClass = bodyClassRe.find(xhtml)?.groupValues?.get(1)?.lowercase() ?: ""
+        val looksLikeTocByClass = bodyClass.contains("p-toc") ||
+            bodyClass.contains("p-mokuji") ||
+            bodyClass.contains("p-contents") ||
+            bodyClass.contains("mokuji") ||
+            bodyClass.contains("toc")
+        if (looksLikeTocByClass) return out
+        val aHrefRe = Regex("""<a\b[^>]*href\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+        var totalLinks = 0
+        var externalFragLinks = 0
+        for (m in aHrefRe.findAll(xhtml)) {
+            val h = m.groupValues[1]
+            if (h.startsWith("#")) continue
+            if (h.startsWith("http:") || h.startsWith("https:") || h.startsWith("mailto:")) continue
+            totalLinks++
+            if (h.contains('#')) externalFragLinks++
+        }
+        if (externalFragLinks >= 4 && externalFragLinks * 2 >= totalLinks) {
+            // 本の目次ページと判断。本文由来の小見出しは 0 件で返す。
+            return out
+        }
+
+        fun tryAdd(id: String, parts: List<TitlePart>) {
+            val plain = buildString {
+                for (p in parts) if (p is TitlePart.Text) append(p.text)
+            }.trim()
+            if (plain.isEmpty() || plain.length > 60) return
+            // 同一ページ内で同じ文字列の見出しは 1 つだけに畳む
+            if (!seen.add(plain)) return
+            out.add(RawSubheading(plain, parts, id))
+        }
+
+        // (a) <h1>〜<h6>
+        val headingRe = Regex(
+            """<(h[1-6])\b([^>]*)>([\s\S]*?)</\1>""",
+            RegexOption.IGNORE_CASE
+        )
+        for (m in headingRe.findAll(xhtml)) {
+            val attrs = m.groupValues[2]
+            val inner = m.groupValues[3]
+            val id = extractAttr(attrs, "id")
+            val parts = parseHeadingInner(inner, chapterDir) ?: continue
+            tryAdd(id, parts)
+        }
+
+        // (b) <p>…<span class="font-1emNN">title</span>…</p>
+        //   1.15em〜1.49em の範囲のもののみ採用。部レベル (1.50em 以上) は
+        //   既に親 TOC エントリが持っているはずなのでここでは拾わない。
+        //   軽く事前フィルタ: 文書全体に `font-1em` が 1 回も出てこなければ
+        //   パターン (b) の正規表現スキャン自体をまるごと省略する。
+        if (xhtml.contains("font-1em")) {
+            val pRe = Regex(
+                """<p\b([^>]*)>([\s\S]*?)</p>""",
+                RegexOption.IGNORE_CASE
+            )
+            val spanSizeRe = Regex(
+                """<span\b([^>]*?class\s*=\s*"[^"]*\bfont-1em(\d{1,2})\b[^"]*"[^>]*)>([\s\S]*?)</span>""",
+                RegexOption.IGNORE_CASE
+            )
+            for (pMatch in pRe.findAll(xhtml)) {
+                val pAttrs = pMatch.groupValues[1]
+                val pInner = pMatch.groupValues[2]
+                if (!pInner.contains("font-1em")) continue
+                // `<p>...<a href="...">...</a>...</p>` のように外向きリンクを含む段落は、
+                // 目次ページ側のリンクか脚注バックリンク等の可能性が高い。
+                // その `<p>` 由来の subheading は採らない (正しい章には NCX 側の本エントリで飛ぶ)。
+                if (pInner.contains("<a ", ignoreCase = true) ||
+                    pInner.contains("<a\t", ignoreCase = true) ||
+                    pInner.contains("<a\n", ignoreCase = true)
+                ) {
+                    continue
+                }
+                val pId = extractAttr(pAttrs, "id")
+                val sMatch = spanSizeRe.find(pInner) ?: continue
+                val emDigits = sMatch.groupValues[2]
+                val emNum = emDigits.padEnd(2, '0').toIntOrNull() ?: continue
+                // emNum 15 → 1.15em, 20 → 1.20em, ..., 50 → 1.50em
+                if (emNum < 15 || emNum >= 50) continue
+                val inner = sMatch.groupValues[3]
+                val parts = parseHeadingInner(inner, chapterDir) ?: continue
+                tryAdd(pId, parts)
+            }
+        }
+
+        return out
+    }
+
+    private fun extractAttr(attrs: String, name: String): String {
+        val r = Regex(
+            """\b$name\s*=\s*"([^"]*)"""",
+            RegexOption.IGNORE_CASE
+        )
+        return r.find(attrs)?.groupValues?.get(1) ?: ""
     }
 
     private fun resolveRelativePath(base: String, relative: String): String {
@@ -479,6 +765,13 @@ class EpubParser(private val context: Context) {
     }
 
     companion object {
+        /**
+         * 1 つの TOC エントリあたりに小見出しを探して走査する spine ファイル数の
+         * 上限。spine が何百もある電子書籍で、TOC 木生成だけで数十秒かかる
+         * ような事態を避けるための安全弁。
+         */
+        private const val MAX_SUBHEADING_SCAN_FILES = 6
+
         /**
          * ICU4Jを使ってバイト列のエンコーディングを自動検出し、文字列に変換する。
          * XML/HTML宣言のcharset指定も参照し、CJK文字の正確なデコードを保証する。
