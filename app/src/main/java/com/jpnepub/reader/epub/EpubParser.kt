@@ -603,14 +603,21 @@ class EpubParser(private val context: Context) {
         }
 
         // (a) <h1>〜<h6>
+        //   id="..." を持たない見出し (`<h3 class="gfont1">一</h3>` のような
+        //   節番号ヘッダ) はそのままでは章内ジャンプできないため、文書内の
+        //   h* 出現順で合成 id `__h<N>` を付ける。ContentExtractor 側は同順で
+        //   `ContentNode.Anchor("__h<N>")` を emit するため、両者が必ず一致する。
         val headingRe = Regex(
             """<(h[1-6])\b([^>]*)>([\s\S]*?)</\1>""",
             RegexOption.IGNORE_CASE
         )
+        var hOrdinal = 0
         for (m in headingRe.findAll(xhtml)) {
+            val ord = hOrdinal++
             val attrs = m.groupValues[2]
             val inner = m.groupValues[3]
-            val id = extractAttr(attrs, "id")
+            val explicitId = extractAttr(attrs, "id")
+            val id = if (explicitId.isNotEmpty()) explicitId else "__h$ord"
             val parts = parseHeadingInner(inner, chapterDir) ?: continue
             tryAdd(id, parts)
         }

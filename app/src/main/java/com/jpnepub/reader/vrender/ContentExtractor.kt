@@ -71,6 +71,10 @@ class ContentExtractor {
         var headingLevel = 0
         val headingBuffer = StringBuilder()
         val headingParts = mutableListOf<ContentNode.HeadingPart>()
+        // h1〜h6 の文書内出現順。id を持たない見出しについて、章内ジャンプ用の
+        // 合成アンカー `__h<N>` を発行するためのカウンタ。EpubParser 側の
+        // findSubheadingsInXhtml でも同じ規則で fragId を割り当てる。
+        var headingOrdinal = 0
 
         fun flushHeadingText() {
             if (headingBuffer.isEmpty()) return
@@ -187,6 +191,12 @@ class ContentExtractor {
                             "h1", "h2", "h3", "h4", "h5", "h6" -> {
                                 flushText()
                                 if (headingLevel == 0) {
+                                    // 明示的な id が無い見出しには `__h<N>` の合成アンカーを打ち、
+                                    // TOC からの章内ジャンプ (#__h3 等) を成立させる。
+                                    if (elemId.isEmpty()) {
+                                        nodes.add(ContentNode.Anchor("__h$headingOrdinal"))
+                                    }
+                                    headingOrdinal++
                                     nodes.add(ContentNode.PageBreak)
                                     headingLevel = (name[1].digitToIntOrNull() ?: 1).coerceIn(1, 6)
                                     headingBuffer.setLength(0)
