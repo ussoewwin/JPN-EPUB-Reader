@@ -4,6 +4,28 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.07
+
+### TOC subheading jumps — support headings without explicit `id`
+
+- **Symptom:** In some EPUBs, sub-numbered TOC entries (e.g. `一`, `二`, `三`…)
+  appeared under the correct parent title, but tapping them always opened the
+  parent heading position instead of the selected subheading.
+- **Root cause:** Those subheadings were represented by `<h*>` tags without
+  `id` attributes, so generated child TOC links had no fragment target to jump
+  within the chapter file.
+- **Fix:** Added deterministic synthetic heading anchors (`__h<N>`) for `h1`–`h6`
+  without explicit ids, generated consistently in both TOC subheading parsing
+  and content extraction so each child TOC row resolves to a real in-page
+  anchor.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
+app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
+```
+
 ## v1.06
 
 ### TOC navigation — fragment jumps and false child-title expansion
