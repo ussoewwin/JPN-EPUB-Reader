@@ -4,6 +4,44 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.06
+
+### TOC navigation — fragment jumps and false child-title expansion
+
+- **Symptom:** In some bundled-volume EPUBs, tapping a TOC entry opened the
+  wrong page (often the beginning of the XHTML file), and some parent entries
+  showed unrelated repeated child titles in the TOC dialog.
+- **Root cause:** Fragment anchors (`#...`) were not consistently preserved
+  from parse -> extract -> layout -> view jump, and subheading expansion
+  sometimes scanned too far when consecutive TOC entries pointed to the same
+  spine file, pulling headings from later unrelated files.
+- **Fix:** Added end-to-end anchor mapping (`id`/`xml:id`) to page indices,
+  robust fragment decoding/lookup and deferred jump resolution in the view,
+  and tightened subheading scan bounds so same-file consecutive entries only
+  inspect their own file window.
+
+### TOC extraction stability — skip in-book TOC pages
+
+- **Symptom:** Auto-generated child TOC rows could be polluted by in-book TOC
+  pages, producing entries that looked valid but navigated to TOC-like pages
+  instead of the actual chapter content.
+- **Root cause:** Heuristics for `<p><span class="font-1emNN">...</span></p>`
+  extraction treated linked TOC-style rows as chapter subheadings.
+- **Fix:** Added suppression heuristics for TOC-like XHTML (`body` class and
+  link-shape checks) and ignored span candidates inside `<a>` wrappers during
+  subheading extraction.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
+app/src/main/java/com/jpnepub/reader/ui/ReaderActivity.kt
+app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
+app/src/main/java/com/jpnepub/reader/vrender/ContentNode.kt
+app/src/main/java/com/jpnepub/reader/vrender/VerticalEpubView.kt
+app/src/main/java/com/jpnepub/reader/vrender/VerticalLayoutEngine.kt
+```
+
 ## v1.05
 
 ### EpubParser — table of contents wrong when one XHTML has many `#fragment` entries
