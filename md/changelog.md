@@ -4,6 +4,56 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.08
+
+### TOC extraction — ignore page-list and landmarks navs
+
+- **Symptom:** Some commercial EPUBs showed a mix of real chapter titles
+  and bare numeric entries (`2`, `3`, `6`, `7`, …, 50-range, etc.) in
+  the table-of-contents dialog, and tapping those numeric rows either
+  navigated to wrong pages or appeared as spurious rows in the parent
+  hierarchy.
+- **Root cause:** The EPUB3 `nav.xhtml` in these books contains three
+  separate `<nav>` elements: `epub:type="toc"` (real TOC),
+  `epub:type="landmarks"` (Cover / Beginning), and
+  `epub:type="page-list"` (print-page numeric anchors). The nav TOC
+  parser scanned the whole document with a global `<a>` regex, pulling
+  every page-list link (`<a href="chap.xhtml#page_N">N</a>`) into the
+  TOC.
+- **Fix:** Restricted `parseNavToc` to the body of the first
+  `<nav epub:type="toc">` element only, using a small helper
+  (`extractTocNavBlock`) that explicitly rejects `landmarks` and
+  `page-list` navs via word-boundary checks. The inner-link regex was
+  also relaxed to tolerate nested `<span>`/inline markup in `<a>`
+  labels before normalization.
+
+### TOC subheading jumps — support span-based subheadings without `id`
+
+- **Symptom:** In some EPUBs, sub-chapter titles rendered as
+  `<p>…<span class="font-1emNN">…</span>…</p>` appeared correctly under
+  their parent entries, but tapping them always opened the parent
+  position instead of the selected subheading.
+- **Root cause:** These subheadings are not `<h*>` tags, so the
+  previously introduced `__h<N>` synthetic-anchor path (v1.07) didn't
+  cover them. When neither the `<p>` nor the `<span>` had an explicit
+  `id`, generated child TOC links had no fragment target within the
+  chapter file.
+- **Fix:** Added a parallel synthetic-anchor scheme `__ps<N>` for
+  `<p><span class="font-1emNN">` subheading candidates. An ordinal is
+  assigned at parse time in `EpubParser.findSubheadingsInXhtml`, and
+  the same ordinal is emitted as `ContentNode.Anchor("__ps<N>")` during
+  extraction when the owning `<p>` has no explicit id. Qualifying
+  em-range (1.15em – 1.49em) and the counter position (including
+  skipped link-bearing `<p>`s) are kept identical on both sides so the
+  TOC child rows land exactly on the matching in-page anchor.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
+app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
+```
+
 ## v1.07
 
 ### TOC subheading jumps — support headings without explicit `id`
