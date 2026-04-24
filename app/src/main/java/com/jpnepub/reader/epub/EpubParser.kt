@@ -636,10 +636,24 @@ class EpubParser(private val context: Context) {
                 """<span\b([^>]*?class\s*=\s*"[^"]*\bfont-1em(\d{1,2})\b[^"]*"[^>]*)>([\s\S]*?)</span>""",
                 RegexOption.IGNORE_CASE
             )
+            // 出現順に「font-1em 小見出し候補」の連番を振り、id が無い小見出しにも
+            // 合成 fragId `__ps<N>` を割り当てる。ContentExtractor 側では同じ規則で
+            // ContentNode.Anchor を emit するため、小タイトルから章内の正しいページへ
+            // ジャンプできる。<a> 絡みの `<p>` は TOC エントリ化はしないが、順序だけは
+            // ContentExtractor と合わせるためカウンタは必ず消費する。
+            var pOrdinal = 0
             for (pMatch in pRe.findAll(xhtml)) {
                 val pAttrs = pMatch.groupValues[1]
                 val pInner = pMatch.groupValues[2]
                 if (!pInner.contains("font-1em")) continue
+                val sMatch = spanSizeRe.find(pInner) ?: continue
+                val emDigits = sMatch.groupValues[2]
+                val emNum = emDigits.padEnd(2, '0').toIntOrNull() ?: continue
+                // emNum 15 → 1.15em, 20 → 1.20em, ..., 50 → 1.50em
+                if (emNum < 15 || emNum >= 50) continue
+
+                val ord = pOrdinal++
+
                 // `<p>...<a href="...">...</a>...</p>` のように外向きリンクを含む段落は、
                 // 目次ページ側のリンクか脚注バックリンク等の可能性が高い。
                 // その `<p>` 由来の subheading は採らない (正しい章には NCX 側の本エントリで飛ぶ)。
@@ -649,15 +663,16 @@ class EpubParser(private val context: Context) {
                 ) {
                     continue
                 }
-                val pId = extractAttr(pAttrs, "id")
-                val sMatch = spanSizeRe.find(pInner) ?: continue
-                val emDigits = sMatch.groupValues[2]
-                val emNum = emDigits.padEnd(2, '0').toIntOrNull() ?: continue
-                // emNum 15 → 1.15em, 20 → 1.20em, ..., 50 → 1.50em
-                if (emNum < 15 || emNum >= 50) continue
+                val explicitPId = extractAttr(pAttrs, "id")
+                val explicitSpanId = extractAttr(sMatch.groupValues[1], "id")
+                val id = when {
+                    explicitPId.isNotEmpty() -> explicitPId
+                    explicitSpanId.isNotEmpty() -> explicitSpanId
+                    else -> "__ps$ord"
+                }
                 val inner = sMatch.groupValues[3]
                 val parts = parseHeadingInner(inner, chapterDir) ?: continue
-                tryAdd(pId, parts)
+                tryAdd(id, parts)
             }
         }
 
@@ -689,15 +704,59 @@ class EpubParser(private val context: Context) {
         val entries = mutableListOf<TocEntry>()
         val baseDir = basePath.substringBeforeLast('/', "")
 
-        val linkPattern = Regex("""<a[^>]+href="([^"]*)"[^>]*>([^<]*)</a>""")
-        for (match in linkPattern.findAll(html)) {
+        // EPUB3 の nav.xhtml には `<nav epub:type="toc">` のほか
+        // `<nav epub:type="page-list">` (ページ番号一覧) や
+        // `<nav epub:type="landmarks">` (Cover/Beginning 等) が並ぶ。
+        // html 全体から <a> を拾うとページ番号まで目次に混入してしまうので、
+        // epub:type="toc" の <nav> 要素の内側だけをスキャン対象にする。
+        val tocBlock = extractTocNavBlock(html) ?: html
+        val linkPattern = Regex("""<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)</a>""")
+        for (match in linkPattern.findAll(tocBlock)) {
             val href = resolveHref(baseDir, match.groupValues[1])
-            val title = sanitizeTocTitle(match.groupValues[2])
+            // <a> 内に <span> や画像断片を許容するため、まず HTML タグ/実体参照を剥がしてから正規化する
+            val inner = match.groupValues[2]
+                .replace(Regex("<[^>]+>"), "")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
+            val title = sanitizeTocTitle(inner)
             if (title.isNotEmpty()) {
                 entries.add(TocEntry(title, href))
             }
         }
         return entries
+    }
+
+    /**
+     * HTML から `<nav ... epub:type="toc" ...>...</nav>` の内側だけを切り出す。
+     * 見つからなければ null を返し、呼び出し側で HTML 全体にフォールバックさせる。
+     */
+    private fun extractTocNavBlock(html: String): String? {
+        // <nav ...> を先頭から順に見て、epub:type="toc" を含むものを採用する。
+        val navOpenRe = Regex("""<nav\b([^>]*)>""", RegexOption.IGNORE_CASE)
+        var searchFrom = 0
+        while (true) {
+            val open = navOpenRe.find(html, searchFrom) ?: return null
+            val attrs = open.groupValues[1]
+            val isToc = Regex(
+                """epub:type\s*=\s*"[^"]*\btoc\b[^"]*"""",
+                RegexOption.IGNORE_CASE
+            ).containsMatchIn(attrs)
+            // epub:type="landmarks" / "page-list" 等も `toc` を部分文字列として
+            // 含みうるので単純な contains("toc") ではなく語境界で判定する。
+            if (isToc && !Regex(
+                    """epub:type\s*=\s*"[^"]*\b(landmarks|page-list)\b[^"]*"""",
+                    RegexOption.IGNORE_CASE
+                ).containsMatchIn(attrs)
+            ) {
+                val bodyStart = open.range.last + 1
+                val closeIdx = html.indexOf("</nav>", bodyStart, ignoreCase = true)
+                return if (closeIdx < 0) html.substring(bodyStart) else html.substring(bodyStart, closeIdx)
+            }
+            searchFrom = open.range.last + 1
+        }
     }
 
     /**

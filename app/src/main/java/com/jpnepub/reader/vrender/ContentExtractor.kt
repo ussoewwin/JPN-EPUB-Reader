@@ -75,6 +75,13 @@ class ContentExtractor {
         // 合成アンカー `__h<N>` を発行するためのカウンタ。EpubParser 側の
         // findSubheadingsInXhtml でも同じ規則で fragId を割り当てる。
         var headingOrdinal = 0
+        // `<p>…<span class="font-1emNN">…</span>…</p>` パターンの小見出し候補。
+        // 1.15em〜1.49em (emNum 15〜49) の最初に現れた span で、その `<p>` を
+        // 「subheading 候補」として 1 回だけ合成アンカー `__ps<N>` を発行する。
+        // EpubParser.findSubheadingsInXhtml 側と同じ順序規則なので、TOC からの
+        // 章内ジャンプがファイル先頭ではなく該当ページに飛ぶようになる。
+        val pStack = ArrayDeque<PFrame>()
+        var pSpanOrdinal = 0
 
         fun flushHeadingText() {
             if (headingBuffer.isEmpty()) return
@@ -209,6 +216,33 @@ class ContentExtractor {
                             // なってしまう。段落扱いは p / 箇条書き等に限定する。
                             "p", "li", "blockquote", "pre" -> {
                                 if (headingLevel == 0) emitParaBreak()
+                                if (name == "p") {
+                                    pStack.addLast(
+                                        PFrame(hasExplicitId = elemId.isNotEmpty())
+                                    )
+                                }
+                            }
+                            "span" -> {
+                                // `<p>...<span class="font-1emNN">タイトル</span>...</p>` の
+                                // 小見出しパターン。最初の qualifying span で合成アンカーを 1 つだけ
+                                // emit し、TOC の子エントリ (`#__ps<N>` 等) が該当ページに着地する
+                                // ようにする。em 範囲は EpubParser 側と完全に一致させる (15〜49)。
+                                val cssClass = parser.getAttributeValue(null, "class") ?: ""
+                                val emNum = extractFontEmNum(cssClass)
+                                if (emNum != null && emNum in 15..49 &&
+                                    pStack.isNotEmpty() && !pStack.last().anchored
+                                ) {
+                                    val ord = pSpanOrdinal++
+                                    val frame = pStack.last()
+                                    val spanHasId = elemId.isNotEmpty()
+                                    if (!frame.hasExplicitId && !spanHasId &&
+                                        skipDepth == 0 && footnoteAnchorDepth == 0
+                                    ) {
+                                        flushText()
+                                        nodes.add(ContentNode.Anchor("__ps$ord"))
+                                    }
+                                    frame.anchored = true
+                                }
                             }
                         }
                     }
@@ -256,6 +290,7 @@ class ContentExtractor {
                             }
                             "p" -> {
                                 if (headingLevel == 0) emitParaBreak()
+                                if (pStack.isNotEmpty()) pStack.removeLast()
                             }
                         }
                     }
@@ -358,7 +393,27 @@ class ContentExtractor {
         return parts.joinToString("/")
     }
 
+    /**
+     * `<p>` のスタックフレーム。`<p>` 内で最初に現れる `font-1em` 小見出し span
+     * によって合成アンカーを 1 回だけ発行するために使う。
+     */
+    private class PFrame(val hasExplicitId: Boolean) {
+        var anchored: Boolean = false
+    }
+
+    /**
+     * `class="... font-1emNN ..."` から NN (1 桁または 2 桁) を取り出して
+     * 2 桁ゼロ埋めの整数で返す。EpubParser.findSubheadingsInXhtml と同じ規則。
+     * 例: `font-1em2` → 20, `font-1em20` → 20, `font-1em50` → 50。
+     */
+    private fun extractFontEmNum(cssClass: String): Int? {
+        val m = FONT_EM_RE.find(cssClass) ?: return null
+        return m.groupValues[1].padEnd(2, '0').toIntOrNull()
+    }
+
     companion object {
+        private val FONT_EM_RE = Regex("""\bfont-1em(\d{1,2})""")
+
         /**
          * ひらがな・カタカナ・CJK 統合・拡張A の字と字のあいだだけに挟まる、
          * 「タグ整形や横組トラッキング由来とみなして良い空白」を除去する。
