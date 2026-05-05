@@ -4,6 +4,29 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.09
+
+### EPUB loading — fix false `missing OPF` failures on valid files
+
+- **Symptom:** Some valid EPUBs failed to open with
+  `Invalid EPUB: missing OPF at OPS/package.opf`, even though they opened
+  correctly in other readers.
+- **Root cause:** OPF detection relied on a brittle stream-first ZIP path and
+  a strict single-key lookup. In some Android `content://` provider flows,
+  this made entry discovery/lookup less robust than needed for real-world EPUB
+  packaging variations.
+- **Fix:** Switched URI parsing to a deterministic `ZipFile` pipeline by first
+  copying the content stream to a cache temp file, then enumerating ZIP central
+  directory entries. Added canonical resource-path resolution for OPF lookup
+  (`\\`/`/`, `./`/`/`, case-insensitive fallback, filename-tail fallback), and
+  normalized `container.xml` rootfile paths before lookup.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
+```
+
 ## v1.08
 
 ### TOC extraction — ignore page-list and landmarks navs
