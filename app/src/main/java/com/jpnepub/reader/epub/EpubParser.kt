@@ -7,8 +7,7 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.*
 import java.nio.charset.Charset
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
+import java.util.zip.ZipFile
 
 data class EpubBook(
     val title: String,
@@ -50,27 +49,36 @@ class EpubParser(private val context: Context) {
 
     fun parse(uri: Uri): EpubBook {
         val resources = mutableMapOf<String, ByteArray>()
+        val tmp = File.createTempFile("jpnepub_", ".epub", context.cacheDir)
+        try {
+            // content:// を一旦ローカルへ退避し、ZipFile で中央ディレクトリから読む。
+            // 一部 provider で ZipInputStream 直読みだとエントリ欠落が起きるため。
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(tmp).use { out -> input.copyTo(out) }
+            } ?: throw IOException("Cannot open EPUB file")
 
-        context.contentResolver.openInputStream(uri)?.use { inputStream ->
-            ZipInputStream(BufferedInputStream(inputStream)).use { zis ->
-                var entry: ZipEntry? = zis.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory) {
-                        val data = zis.readBytes()
-                        resources[normalizePath(entry.name)] = data
+            ZipFile(tmp).use { zip ->
+                val en = zip.entries()
+                while (en.hasMoreElements()) {
+                    val entry = en.nextElement()
+                    if (entry.isDirectory) continue
+                    zip.getInputStream(entry).use { ins ->
+                        resources[normalizePath(entry.name)] = ins.readBytes()
                     }
-                    entry = zis.nextEntry
                 }
             }
-        } ?: throw IOException("Cannot open EPUB file")
+        } finally {
+            tmp.delete()
+        }
 
         val containerXml = resources["META-INF/container.xml"]
             ?: throw IOException("Invalid EPUB: missing container.xml")
         val rootFilePath = parseContainer(containerXml)
-
-        val opfData = resources[rootFilePath]
+        val resolvedOpfPath = resolveResourcePath(rootFilePath, resources)
             ?: throw IOException("Invalid EPUB: missing OPF at $rootFilePath")
-        val opfDir = rootFilePath.substringBeforeLast('/', "")
+        val opfData = resources[resolvedOpfPath]
+            ?: throw IOException("Invalid EPUB: missing OPF at $rootFilePath")
+        val opfDir = resolvedOpfPath.substringBeforeLast('/', "")
 
         return parseOpf(opfData, opfDir, resources)
     }
@@ -80,7 +88,29 @@ class EpubParser(private val context: Context) {
     }
 
     private fun normalizePath(path: String): String {
-        return path.removePrefix("/").removePrefix("./")
+        return path.replace('\\', '/').removePrefix("/").removePrefix("./")
+    }
+
+    /**
+     * `container.xml` の full-path と ZIP エントリキーのゆらぎを吸収する。
+     * - 区切り文字 (`\` / `/`)
+     * - 先頭 `./` / `/`
+     * - 大文字小文字差
+     */
+    private fun resolveResourcePath(path: String, resources: Map<String, ByteArray>): String? {
+        val normalized = normalizePath(path).trim()
+        if (normalized.isEmpty()) return null
+
+        resources[normalized]?.let { return normalized }
+        resources.keys.firstOrNull { it.equals(normalized, ignoreCase = true) }?.let { return it }
+
+        // 一部 EPUB では rootfile 側が相対差分を含むことがあるため、
+        // 最後のパス断片一致でもフォールバック探索する。
+        val tail = normalized.substringAfterLast('/')
+        resources.keys.firstOrNull { it.substringAfterLast('/').equals(tail, ignoreCase = true) }?.let {
+            return it
+        }
+        return null
     }
 
     private fun resolveHref(base: String, href: String): String {
@@ -94,8 +124,9 @@ class EpubParser(private val context: Context) {
 
         while (parser.next() != XmlPullParser.END_DOCUMENT) {
             if (parser.eventType == XmlPullParser.START_TAG && parser.name == "rootfile") {
-                return parser.getAttributeValue(null, "full-path")
+                val raw = parser.getAttributeValue(null, "full-path")
                     ?: throw IOException("Invalid container.xml")
+                return normalizePath(raw)
             }
         }
         throw IOException("No rootfile found in container.xml")
