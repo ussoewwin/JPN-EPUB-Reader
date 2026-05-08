@@ -4,6 +4,37 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.10
+
+### TOC subheadings — support `<p class="font-1emNN">` pattern and force page breaks
+
+- **Symptom:** In some commercial EPUBs, chapter-level sub-titles formatted as
+  `<p class="font-1emNN">` (e.g. `font-1em30`) were missing from the table of
+  contents. When they did appear, they were not preceded by a page break, so
+  the sub-title flowed into the preceding paragraph instead of starting a new
+  page.
+- **Root cause:** The subheading scanner (`findSubheadingsInXhtml`) only
+  detected the `<p>…<span class="font-1emNN">…</span>…</p>` pattern, ignoring
+  cases where the `<p>` element itself carries the `font-1emNN` class. The
+  content extractor likewise did not emit a `PageBreak` before the synthetic
+  `__ps<N>` anchor, so layout treated the sub-title as inline body text.
+- **Fix:**
+  - `EpubParser.kt`: Added detection for `<p class="font-1emNN">` (emNum 15‑49)
+    as a valid subheading pattern, generating synthetic `__ps<N>` fragment IDs
+    with the same ordinal rules used for span-based subheadings.
+  - `ContentExtractor.kt`: Extended the `<p>` start-tag handler to emit a
+    `ContentNode.PageBreak` followed by `ContentNode.Anchor("__ps$ord")` when
+    the paragraph itself has a qualifying `font-1emNN` class. Applied the same
+    `PageBreak` addition to the existing `<span class="font-1emNN">` path so
+    both patterns consistently start on a new page.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
+app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
+```
+
 ## v1.09
 
 ### EPUB loading — fix false `missing OPF` failures on valid files
