@@ -653,7 +653,8 @@ class EpubParser(private val context: Context) {
             tryAdd(id, parts)
         }
 
-        // (b) <p>…<span class="font-1emNN">title</span>…</p>
+        // (b) <p class="font-1emNN">title</p> または
+        //     <p>…<span class="font-1emNN">title</span>…</p>
         //   1.15em〜1.49em の範囲のもののみ採用。部レベル (1.50em 以上) は
         //   既に親 TOC エントリが持っているはずなのでここでは拾わない。
         //   軽く事前フィルタ: 文書全体に `font-1em` が 1 回も出てこなければ
@@ -676,6 +677,26 @@ class EpubParser(private val context: Context) {
             for (pMatch in pRe.findAll(xhtml)) {
                 val pAttrs = pMatch.groupValues[1]
                 val pInner = pMatch.groupValues[2]
+
+                // <p> 自体に font-1emNN クラスを持つパターンを先に判定。
+                // <p class="font-1em30">頬に傷のある男</p> 等。
+                val pClass = extractAttr(pAttrs, "class")
+                val pEmNum = extractFontEmNum(pClass)
+                if (pEmNum != null && pEmNum in 15..49) {
+                    val ord = pOrdinal++
+                    if (pInner.contains("<a ", ignoreCase = true) ||
+                        pInner.contains("<a\t", ignoreCase = true) ||
+                        pInner.contains("<a\n", ignoreCase = true)
+                    ) {
+                        continue
+                    }
+                    val explicitPId = extractAttr(pAttrs, "id")
+                    val id = if (explicitPId.isNotEmpty()) explicitPId else "__ps$ord"
+                    val parts = parseHeadingInner(pInner, chapterDir) ?: continue
+                    tryAdd(id, parts)
+                    continue
+                }
+
                 if (!pInner.contains("font-1em")) continue
                 val sMatch = spanSizeRe.find(pInner) ?: continue
                 val emDigits = sMatch.groupValues[2]
@@ -708,6 +729,16 @@ class EpubParser(private val context: Context) {
         }
 
         return out
+    }
+
+    /**
+     * `class="... font-1emNN ..."` から NN (1 桁または 2 桁) を取り出して
+     * 2 桁ゼロ埋めの整数で返す。ContentExtractor.extractFontEmNum と同じ規則。
+     * 例: `font-1em2` → 20, `font-1em20` → 20, `font-1em50` → 50。
+     */
+    private fun extractFontEmNum(cssClass: String): Int? {
+        val m = Regex("""\bfont-1em(\d{1,2})""").find(cssClass) ?: return null
+        return m.groupValues[1].padEnd(2, '0').toIntOrNull()
     }
 
     private fun extractAttr(attrs: String, name: String): String {

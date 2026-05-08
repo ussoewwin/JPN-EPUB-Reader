@@ -217,9 +217,23 @@ class ContentExtractor {
                             "p", "li", "blockquote", "pre" -> {
                                 if (headingLevel == 0) emitParaBreak()
                                 if (name == "p") {
-                                    pStack.addLast(
-                                        PFrame(hasExplicitId = elemId.isNotEmpty())
-                                    )
+                                    val pClass = parser.getAttributeValue(null, "class") ?: ""
+                                    val pEmNum = extractFontEmNum(pClass)
+                                    val frame = PFrame(hasExplicitId = elemId.isNotEmpty())
+                                    // <p class="font-1emNN"> パターン (例: Kadokawa の小見出し)
+                                    // EpubParser.findSubheadingsInXhtml と同じ範囲 (15〜49) を
+                                    // 採用し、同じ pSpanOrdinal で __ps<N> を割り当てる。
+                                    if (pEmNum != null && pEmNum in 15..49 &&
+                                        !frame.hasExplicitId &&
+                                        skipDepth == 0 && footnoteAnchorDepth == 0
+                                    ) {
+                                        val ord = pSpanOrdinal++
+                                        flushText()
+                                        nodes.add(ContentNode.PageBreak)
+                                        nodes.add(ContentNode.Anchor("__ps$ord"))
+                                        frame.anchored = true
+                                    }
+                                    pStack.addLast(frame)
                                 }
                             }
                             "span" -> {
@@ -239,6 +253,7 @@ class ContentExtractor {
                                         skipDepth == 0 && footnoteAnchorDepth == 0
                                     ) {
                                         flushText()
+                                        nodes.add(ContentNode.PageBreak)
                                         nodes.add(ContentNode.Anchor("__ps$ord"))
                                     }
                                     frame.anchored = true
