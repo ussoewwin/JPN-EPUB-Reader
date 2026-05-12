@@ -311,7 +311,7 @@ class ReaderActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val nodes = withContext(Dispatchers.Default) {
                 val data = b.resources[spineItem.href] ?: return@withContext emptyList()
-                ContentExtractor.extractFromBytes(data, chapterDir)
+                ContentExtractor.extractFromBytes(data, chapterDir, spineItem.href)
             }
             binding.verticalView.setChapter(
                 content = nodes,

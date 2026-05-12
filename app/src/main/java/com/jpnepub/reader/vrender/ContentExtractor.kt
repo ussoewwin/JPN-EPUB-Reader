@@ -43,8 +43,14 @@ class ContentExtractor {
         return if (start == 0 && end == s.length) s else s.substring(start, end)
     }
 
-    fun extract(xhtml: String, chapterDir: String): List<ContentNode> {
+    fun extract(xhtml: String, chapterDir: String, href: String): List<ContentNode> {
         val nodes = mutableListOf<ContentNode>()
+        // 合成アンカー ID のファイル間衝突を防ぐため、href をプレフィックスに使う。
+        // EpubParser.findSubheadingsInXhtml と同じ規則で生成し、両者が必ず一致する。
+        val anchorIdPrefix = href
+            .replace('/', '_')
+            .replace('\\', '_')
+            .replace('.', '_')
 
         // XML宣言などで壊れる場合があるので、<html から始まる形に正規化
         val cleaned = preprocess(xhtml)
@@ -200,10 +206,14 @@ class ContentExtractor {
                                 if (headingLevel == 0) {
                                     // 明示的な id が無い見出しには `__h<N>` の合成アンカーを打ち、
                                     // TOC からの章内ジャンプ (#__h3 等) を成立させる。
+                                    // Anchor は PageBreak の**後**に配置し、VerticalLayoutEngine の
+                                    // PageBreak 処理後に空ページがあっても新しいページを開始して
+                                    // pendingAnchorIds を pages.size (次のページ) で解決する。
+                                    // PageBreak の前に置くと Anchor が前のページにマッピングされる。
+                                    val hOrd = headingOrdinal++
                                     if (elemId.isEmpty()) {
-                                        nodes.add(ContentNode.Anchor("__h$headingOrdinal"))
+                                        nodes.add(ContentNode.Anchor("__${anchorIdPrefix}_h$hOrd"))
                                     }
-                                    headingOrdinal++
                                     nodes.add(ContentNode.PageBreak)
                                     headingLevel = (name[1].digitToIntOrNull() ?: 1).coerceIn(1, 6)
                                     headingBuffer.setLength(0)
@@ -230,7 +240,7 @@ class ContentExtractor {
                                         val ord = pSpanOrdinal++
                                         flushText()
                                         nodes.add(ContentNode.PageBreak)
-                                        nodes.add(ContentNode.Anchor("__ps$ord"))
+                                        nodes.add(ContentNode.Anchor("__${anchorIdPrefix}_ps$ord"))
                                         frame.anchored = true
                                     }
                                     pStack.addLast(frame)
@@ -254,7 +264,7 @@ class ContentExtractor {
                                     ) {
                                         flushText()
                                         nodes.add(ContentNode.PageBreak)
-                                        nodes.add(ContentNode.Anchor("__ps$ord"))
+                                        nodes.add(ContentNode.Anchor("__${anchorIdPrefix}_ps$ord"))
                                     }
                                     frame.anchored = true
                                 }
@@ -414,6 +424,9 @@ class ContentExtractor {
      */
     private class PFrame(val hasExplicitId: Boolean) {
         var anchored: Boolean = false
+        /** この <p> 内に <a> タグが含まれるか。EpubParser と同じく <a> を含む段落は
+         * 小見出し候補から除外するためのフラグ。 */
+        var hasAnchor: Boolean = false
     }
 
     /**
@@ -447,9 +460,9 @@ class ContentExtractor {
         /**
          * EPUB の spine アイテム data (ByteArray) からテキストを抽出する便利関数。
          */
-        fun extractFromBytes(data: ByteArray, chapterDir: String): List<ContentNode> {
+        fun extractFromBytes(data: ByteArray, chapterDir: String, href: String): List<ContentNode> {
             val text = EpubParser.decodeWithDetection(data)
-            return ContentExtractor().extract(text, chapterDir)
+            return ContentExtractor().extract(text, chapterDir, href)
         }
     }
 }

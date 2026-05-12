@@ -424,6 +424,17 @@ class VerticalLayoutEngine(
                         rowY = firstRowBaseline
                         isFirstGlyphOfColumn = true
                     }
+                    // PageBreak の直後に Anchor がある場合、pendingAnchorIds が解決される
+                    // までは pages.size が古いままなので、空でも新しいページを開始して
+                    // 次のコンテンツが新しいページに載るようにする。
+                    if (pendingAnchorIds.isNotEmpty()) {
+                        pages.add(Page(currentGlyphs, currentImages))
+                        currentGlyphs = mutableListOf()
+                        currentImages = mutableListOf()
+                        colIndex = 0
+                        rowY = firstRowBaseline
+                        isFirstGlyphOfColumn = true
+                    }
                     pendingParaIndent = false
                 }
                 is ContentNode.Heading -> {

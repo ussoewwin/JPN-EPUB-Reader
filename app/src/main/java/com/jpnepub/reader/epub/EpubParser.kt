@@ -422,6 +422,8 @@ class EpubParser(private val context: Context) {
         val plainTitle: String,
         val parts: List<TitlePart>,
         val fragId: String,
+        /** 見出しレベル。h1=1, h2=2, ..., h6=6。font-1em 小見出しは 2。 */
+        val level: Int,
     )
 
     /**
@@ -486,7 +488,7 @@ class EpubParser(private val context: Context) {
             }
             val xhtml = decodeWithDetection(data)
             val chapterDir = sp.href.substringBeforeLast('/', "")
-            val result = findSubheadingsInXhtml(xhtml, chapterDir)
+            val result = findSubheadingsInXhtml(xhtml, chapterDir, sp.href)
             scanCache[sp.href] = result
             return result
         }
@@ -511,17 +513,61 @@ class EpubParser(private val context: Context) {
             }
 
             val parentFragId = entry.href.substringAfter('#', "")
+            // 次のエントリが同じファイルを指していて fragId を持つ場合、
+            // 子の範囲は parentFragId 〜 nextEntrySameFileFragId に限定する。
+            val nextEntrySameFileFragId = if (
+                nextEntry != null && nextStartIdx == startIdx
+            ) {
+                nextEntry.href.substringAfter('#', "")
+            } else ""
+
             val subs = mutableListOf<TocEntry>()
+            var bestFragId = parentFragId
             for (idx in startIdx until endIdx) {
                 val sp = spine[idx]
-                // NCX 側が既にこのファイルを複数回 fragment で分割していれば、
-                // 本文を改めて走査せず NCX を信頼する (合本対策)。
-                if ((spineUsage[sp.href] ?: 0) >= 2) continue
-                val skipFragId = if (idx == startIdx) parentFragId else ""
                 val cached = scanOrCached(sp)
-                for (sub in cached) {
+
+                // NCX 側が既にこのファイルを複数回 fragment で分割している場合
+                // (spineUsage >= 2)、文書順で「自分の parentFragId の直後から
+                // 次のエントリの fragId の前まで」だけを子に含める。
+                val isHeavilyFragmented = (spineUsage[sp.href] ?: 0) >= 2
+
+                // この sp 内で走査する RawSubheading の範囲 [subStart, subEnd)
+                val subStart: Int
+                val subEnd: Int
+                val skipFragId: String
+                if (isHeavilyFragmented && idx == startIdx) {
+                    // 文書順で自分の親 fragId が出現した位置の直後から、
+                    // 次の親 fragId が出現する直前までが「自分の子」。
+                    val parentIdx = if (parentFragId.isNotEmpty()) {
+                        val p = cached.indexOfFirst { it.fragId == parentFragId }
+                        if (p < 0) 0 else p + 1
+                    } else 0
+                    val nextIdx = if (nextEntrySameFileFragId.isNotEmpty()) {
+                        val n = cached.indexOfFirst { it.fragId == nextEntrySameFileFragId }
+                        if (n < 0) cached.size else n
+                    } else cached.size
+                    subStart = parentIdx
+                    subEnd = nextIdx
+                    skipFragId = ""
+                } else if (isHeavilyFragmented) {
+                    // startIdx 以外の sp は走査しない (同じファイルの別エントリの守備範囲)
+                    subStart = 0
+                    subEnd = 0
+                    skipFragId = ""
+                } else {
+                    subStart = 0
+                    subEnd = cached.size
+                    skipFragId = if (idx == startIdx) parentFragId else ""
+                }
+
+                for (j in subStart until subEnd) {
+                    val sub = cached[j]
+                    // 親と同じ fragId はスキップ
                     if (skipFragId.isNotEmpty() && sub.fragId == skipFragId) continue
+                    // 親と同じタイトルはスキップ
                     if (sub.plainTitle.trim() == entry.title.trim()) continue
+
                     val prev = subs.lastOrNull()
                     if (prev != null &&
                         prev.title == sub.plainTitle &&
@@ -536,9 +582,21 @@ class EpubParser(private val context: Context) {
                             titleParts = sub.parts,
                         )
                     )
+
+                    // 親の href に fragId が無い場合の補正候補 (最初の子の fragId)
+                    if (bestFragId.isEmpty() && sub.fragId.isNotEmpty()) {
+                        bestFragId = sub.fragId
+                    }
                 }
             }
-            result.add(if (subs.isNotEmpty()) entry.copy(children = subs) else entry)
+
+            // 親の href を補正 (フラグメントが欠けていた場合)
+            val correctedEntry = if (bestFragId.isNotEmpty() && parentFragId.isEmpty()) {
+                val baseHref = entry.href.substringBefore('#')
+                entry.copy(href = "$baseHref#$bestFragId")
+            } else entry
+
+            result.add(if (subs.isNotEmpty()) correctedEntry.copy(children = subs) else correctedEntry)
         }
         return result
     }
@@ -588,7 +646,12 @@ class EpubParser(private val context: Context) {
     private fun findSubheadingsInXhtml(
         xhtml: String,
         chapterDir: String,
+        href: String,
     ): List<RawSubheading> {
+        val anchorIdPrefix = href
+            .replace('/', '_')
+            .replace('\\', '_')
+            .replace('.', '_')
         val out = mutableListOf<RawSubheading>()
         val seen = HashSet<String>()
 
@@ -623,14 +686,17 @@ class EpubParser(private val context: Context) {
             return out
         }
 
-        fun tryAdd(id: String, parts: List<TitlePart>) {
+        fun tryAdd(id: String, parts: List<TitlePart>, level: Int) {
             val plain = buildString {
                 for (p in parts) if (p is TitlePart.Text) append(p.text)
             }.trim()
             if (plain.isEmpty() || plain.length > 60) return
-            // 同一ページ内で同じ文字列の見出しは 1 つだけに畳む
-            if (!seen.add(plain)) return
-            out.add(RawSubheading(plain, parts, id))
+            // 同一ファイル内で同じ文字列・同じ fragId の見出しのみ畳む。
+            // タイトルが同じでも fragId が異なれば別エントリとして残す
+            // (同じファイルに「一」「二」等が複数回現れるケース)。
+            val key = "$plain|$id"
+            if (!seen.add(key)) return
+            out.add(RawSubheading(plain, parts, id, level))
         }
 
         // (a) <h1>〜<h6>
@@ -645,12 +711,14 @@ class EpubParser(private val context: Context) {
         var hOrdinal = 0
         for (m in headingRe.findAll(xhtml)) {
             val ord = hOrdinal++
+            val tagName = m.groupValues[1]
             val attrs = m.groupValues[2]
             val inner = m.groupValues[3]
             val explicitId = extractAttr(attrs, "id")
-            val id = if (explicitId.isNotEmpty()) explicitId else "__h$ord"
+            val id = if (explicitId.isNotEmpty()) explicitId else "__${anchorIdPrefix}_h$ord"
             val parts = parseHeadingInner(inner, chapterDir) ?: continue
-            tryAdd(id, parts)
+            val level = tagName[1].digitToIntOrNull() ?: 1
+            tryAdd(id, parts, level)
         }
 
         // (b) <p class="font-1emNN">title</p> または
@@ -691,9 +759,9 @@ class EpubParser(private val context: Context) {
                         continue
                     }
                     val explicitPId = extractAttr(pAttrs, "id")
-                    val id = if (explicitPId.isNotEmpty()) explicitPId else "__ps$ord"
+                    val id = if (explicitPId.isNotEmpty()) explicitPId else "__${anchorIdPrefix}_ps$ord"
                     val parts = parseHeadingInner(pInner, chapterDir) ?: continue
-                    tryAdd(id, parts)
+                    tryAdd(id, parts, level = 2)
                     continue
                 }
 
@@ -720,11 +788,11 @@ class EpubParser(private val context: Context) {
                 val id = when {
                     explicitPId.isNotEmpty() -> explicitPId
                     explicitSpanId.isNotEmpty() -> explicitSpanId
-                    else -> "__ps$ord"
+                    else -> "__${anchorIdPrefix}_ps$ord"
                 }
                 val inner = sMatch.groupValues[3]
                 val parts = parseHeadingInner(inner, chapterDir) ?: continue
-                tryAdd(id, parts)
+                tryAdd(id, parts, level = 2)
             }
         }
 
@@ -903,6 +971,11 @@ class EpubParser(private val context: Context) {
         /**
          * ICU4Jを使ってバイト列のエンコーディングを自動検出し、文字列に変換する。
          * XML/HTML宣言のcharset指定も参照し、CJK文字の正確なデコードを保証する。
+         *
+         * XML宣言の `encoding` は信頼するが、宣言値でデコードした結果が明らかな
+         * 文字化け（連続する U+FFFD や制御文字）の場合は、ICU4J 検出結果に
+         * フォールバックする。実際のバイト列と宣言が不一致の EPUB (Shift_JIS
+         * ファイルを utf-8 と宣言している等) を防ぐ。
          */
         fun decodeWithDetection(data: ByteArray): String {
             // First, check for BOM
@@ -911,12 +984,16 @@ class EpubParser(private val context: Context) {
                 return String(data, bomCharset)
             }
 
-            // Check XML/HTML declaration for encoding
+            // Try declared encoding, but validate the result
             val declaredEncoding = detectDeclaredEncoding(data)
             if (declaredEncoding != null) {
                 try {
                     val charset = Charset.forName(declaredEncoding)
-                    return String(data, charset)
+                    val decoded = String(data, charset)
+                    if (!looksLikeMojibake(decoded)) {
+                        return decoded
+                    }
+                    // Declared encoding produced mojibake; fall through to detection
                 } catch (_: Exception) { }
             }
 
@@ -930,7 +1007,10 @@ class EpubParser(private val context: Context) {
                     if (match.confidence >= 50) {
                         try {
                             val charset = Charset.forName(match.name)
-                            return String(data, charset)
+                            val decoded = String(data, charset)
+                            if (!looksLikeMojibake(decoded)) {
+                                return decoded
+                            }
                         } catch (_: Exception) { }
                     }
                 }
@@ -938,6 +1018,26 @@ class EpubParser(private val context: Context) {
 
             // Ultimate fallback: UTF-8
             return String(data, Charsets.UTF_8)
+        }
+
+        /**
+         * デコード結果が文字化けかどうかを簡易判定する。
+         * 連続する U+FFFD (replacement character) や、多量の制御文字が含まれる
+         * 場合に true を返す。
+         */
+        private fun looksLikeMojibake(text: String): Boolean {
+            var replacementCount = 0
+            var controlCount = 0
+            for (c in text) {
+                when {
+                    c == '\uFFFD' -> replacementCount++
+                    c.code in 0x0001..0x001F && c !in "\t\n\r" -> controlCount++
+                }
+            }
+            // 短い文字列でも 1 個の U+FFFD は怪しい。長い文字列では相対的に判断。
+            return replacementCount >= 2 ||
+                (replacementCount >= 1 && text.length < 200) ||
+                controlCount >= 5
         }
 
         private fun detectBom(data: ByteArray): Charset? {
