@@ -4,6 +4,64 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.11
+
+### Fragment-range subheading grouping for heavily-fragmented files
+
+- **Symptom:** In `金田一耕助ファイル20 病院坂の首縊りの家（下）` (and similar commercial EPUBs),
+  sub-titles such as "一", "二", "三" were either missing from the TOC or, when shown,
+  all jumped to the first occurrence instead of the correct chapter section.
+  The TOC also displayed titles in a flat, duplicated list.
+- **Root cause (1 – Mojibake):** `toc.ncx` declared `encoding="utf-8"` but was actually
+  Shift_JIS, garbling TOC titles before they even reached the UI.
+- **Root cause (2 – Global synthetic IDs):** Synthetic anchor IDs (`__h0`, `__ps0`)
+  were unique only within a single file. `VerticalLayoutEngine` maps all identical
+  IDs to the first page encountered, so every "一" jumped to the first file’s first "一".
+- **Root cause (3 – Ordinal mismatch):** `EpubParser` incremented `hOrdinal` for every
+  `<h*>`, but `ContentExtractor` only incremented `headingOrdinal` when a tag lacked
+  an explicit `id`, so synthetic heading IDs drifted between TOC and body.
+- **Root cause (4 – Deduplication collision):** `EpubParser.tryAdd` used only the
+  plain title text as a deduplication key (`seen.add(plainTitle)`). When "一" appeared
+  multiple times in one file, later entries were discarded, collapsing distinct
+  subheadings into a single TOC entry.
+- **Root cause (5 – Page/Anchor ordering):** `ContentExtractor` emitted `Anchor`
+  before `PageBreak`. Because `VerticalLayoutEngine` maps anchors at the current
+  page index, the anchor was bound to the page *before* the new page, so taps
+  always opened the preceding section.
+- **Root cause (6 – No parent-range scoping):** For files split across many spine
+  entries (`spineUsage >= 2`), all remaining subheadings were attached to the first
+  parent TOC entry pointing at that file, causing every small title to appear under
+  the wrong parent or be omitted entirely.
+- **Fix:**
+  - `EpubParser.kt`: Added `level: Int` to `RawSubheading`; updated
+    `findSubheadingsInXhtml` to record each heading’s level. Switched dedup key to
+    `"$plain|$id"` so same-title / different-fragId entries survive.
+    Added file-scoped prefix to synthetic IDs (`__${hrefPrefix}_h$N` / `__ps$N`)
+    so IDs are globally unique across the whole book.
+    Replaced the flat "skip all children for heavily-fragmented files" logic with
+    fragment-range filtering: for a parent entry, only subheadings whose document
+    order falls *after* the parent’s own fragment and *before* the next parent’s
+    fragment in the same file are attached as children.
+  - `ContentExtractor.kt`: Synchronized `headingOrdinal` increment so it advances
+    for **every** `<h*>` tag, matching `EpubParser`. Added file-scoped prefix to
+    synthetic IDs (`__${hrefPrefix}_h$N` / `__ps$N`). Added `PageBreak` before
+    every synthetic `Anchor` so anchors map to the new page. Added `hasAnchor`
+    flag to `PFrame`; `<p>` / `<span>` subheading anchors are skipped when the
+    paragraph already contains an `<a>` tag, matching `EpubParser` skip logic.
+  - `ReaderActivity.kt`: Updated `ContentExtractor.extractFromBytes` call site to
+    pass `spineItem.href` for ID-prefix generation.
+  - `VerticalLayoutEngine.kt`: Ensured `PageBreak` creates an empty page when
+    pending anchors exist, guaranteeing `anchorPages` maps to the correct page.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
+app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
+app/src/main/java/com/jpnepub/reader/ui/ReaderActivity.kt
+app/src/main/java/com/jpnepub/reader/vrender/VerticalLayoutEngine.kt
+```
+
 ## v1.10
 
 ### TOC subheadings — support `<p class="font-1emNN">` pattern and force page breaks
