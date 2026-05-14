@@ -36,6 +36,7 @@ import com.jpnepub.reader.epub.TitlePart
 import com.jpnepub.reader.renderer.EpubRenderer
 import com.jpnepub.reader.renderer.ReaderConfig
 import com.jpnepub.reader.vrender.ContentExtractor
+import com.jpnepub.reader.manga.MangaView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,6 +57,8 @@ class ReaderActivity : AppCompatActivity() {
 
     /** 縦書きEPUBは Canvas ベースのネイティブ描画を使う */
     private var useNativeVertical = false
+    /** 漫画EPUB (画像のみ) は MangaView を使う */
+    private var isMangaMode = false
     /** チャプター切替時、次チャプターを末尾から表示する指示 (前ページ操作で境界を越えた場合) */
     private var pendingStartFromEnd = false
 
@@ -79,9 +82,15 @@ class ReaderActivity : AppCompatActivity() {
                     book = parsed
                     renderer = EpubRenderer(parsed, config)
                     binding.tvTitle.text = parsed.title
-                    useNativeVertical = parsed.isVertical && config.verticalWriting
+                    isMangaMode = parsed.isManga
+                    useNativeVertical = !isMangaMode && parsed.isVertical && config.verticalWriting
                     showActiveRenderer()
-                    loadChapter(0)
+                    if (isMangaMode) {
+                        setupMangaView()
+                        loadMangaPages(parsed)
+                    } else {
+                        loadChapter(0)
+                    }
                 } catch (e: Exception) {
                     Toast.makeText(
                         this@ReaderActivity,
@@ -97,12 +106,18 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun showActiveRenderer() {
-        if (useNativeVertical) {
+        if (isMangaMode) {
+            binding.webView.visibility = View.GONE
+            binding.verticalView.visibility = View.GONE
+            binding.mangaView.visibility = View.VISIBLE
+        } else if (useNativeVertical) {
             binding.webView.visibility = View.GONE
             binding.verticalView.visibility = View.VISIBLE
+            binding.mangaView.visibility = View.GONE
         } else {
             binding.webView.visibility = View.VISIBLE
             binding.verticalView.visibility = View.GONE
+            binding.mangaView.visibility = View.GONE
         }
     }
 
@@ -147,12 +162,14 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun goNext() {
-        if (useNativeVertical) binding.verticalView.nextPage()
+        if (isMangaMode) binding.mangaView.nextPage()
+        else if (useNativeVertical) binding.verticalView.nextPage()
         else binding.webView.evaluateJavascript("JpnEpubPager.next();", null)
     }
 
     private fun goPrev() {
-        if (useNativeVertical) binding.verticalView.prevPage()
+        if (isMangaMode) binding.mangaView.prevPage()
+        else if (useNativeVertical) binding.verticalView.prevPage()
         else binding.webView.evaluateJavascript("JpnEpubPager.prev();", null)
     }
 
@@ -180,6 +197,31 @@ class ReaderActivity : AppCompatActivity() {
                 navigatePrev()
             }
         }
+    }
+
+    // ================================================================
+    //   漫画ビューのセットアップ
+    // ================================================================
+    private fun setupMangaView() {
+        binding.mangaView.onPageChanged = { page, total ->
+            updateProgress(page, total)
+        }
+        // Manga is a flat list — no chapter boundaries to cross
+        binding.mangaView.onChapterBoundary = null
+    }
+
+    /**
+     * Load all manga pages at once into MangaView.
+     * Unlike text EPUBs which load one spine item at a time,
+     * manga treats the entire book as a flat page list.
+     */
+    private fun loadMangaPages(b: EpubBook) {
+        binding.mangaView.setPages(
+            pages = b.mangaPages,
+            imageResolver = { path -> b.resources[path] },
+            startPage = 0,
+        )
+        binding.progressBar.visibility = View.GONE
     }
 
     // ================================================================
@@ -580,7 +622,9 @@ class ReaderActivity : AppCompatActivity() {
                 ).withDarkMode()
                 ReaderConfig.save(this, config)
                 renderer = book?.let { EpubRenderer(it, config) }
-                useNativeVertical = (book?.isVertical == true) && config.verticalWriting
+                if (!isMangaMode) {
+                    useNativeVertical = (book?.isVertical == true) && config.verticalWriting
+                }
                 val fontSizePx = TypedValue.applyDimension(
                     TypedValue.COMPLEX_UNIT_SP,
                     config.fontSizePx.toFloat(),
@@ -592,7 +636,11 @@ class ReaderActivity : AppCompatActivity() {
                     bold = config.bold,
                 )
                 showActiveRenderer()
-                loadChapter(currentChapter)
+                if (isMangaMode) {
+                    book?.let { loadMangaPages(it) }
+                } else {
+                    loadChapter(currentChapter)
+                }
             }
             .setNegativeButton("キャンセル", null)
             .setOnDismissListener {

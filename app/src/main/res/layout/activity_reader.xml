@@ -17,6 +17,12 @@
         android:layout_height="match_parent"
         android:visibility="gone" />
 
+    <com.jpnepub.reader.manga.MangaView
+        android:id="@+id/mangaView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
     <!-- Top overlay bar -->
     <LinearLayout
         android:id="@+id/topBar"

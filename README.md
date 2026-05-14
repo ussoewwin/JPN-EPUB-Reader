@@ -13,6 +13,7 @@ ellipses, and pixel-perfect page boundaries that never skip.
 ## Features
 
 ### No more mojibake
+
 - **ICU4J charset auto-detection.** Byte stream is classified by
   (1) BOM, (2) the `encoding` declared in the XML/HTML prolog, and
   (3) ICU4J statistical detection.  Shift_JIS and EUC-JP inputs
@@ -27,8 +28,10 @@ ellipses, and pixel-perfect page boundaries that never skip.
   net for books that ship without a charset declaration.
 
 ### Real Japanese vertical writing
+
 The vertical renderer is NOT a WebView with `writing-mode: vertical-rl`
 slapped on. It is a custom `View` that:
+
 - Pre-computes the exact pixel position of every glyph before drawing,
   so pagination is deterministic and never skips a page.
 - Lays out right-to-left columns, top-to-bottom characters.
@@ -51,6 +54,7 @@ slapped on. It is a custom `View` that:
   treated as a full-page illustration.
 
 ### Reader features
+
 - EPUB 2 and EPUB 3.
 - Chapter navigation: previous / next chapter and a table-of-contents
   jump.
@@ -68,11 +72,13 @@ slapped on. It is a custom `View` that:
 ## Build
 
 ### Requirements
+
 - Android Studio Hedgehog (2023.1.1) or newer
 - JDK 17
 - Android SDK 34+
 
 ### Steps
+
 1. Open the project in Android Studio.
 2. Let Gradle sync.
 3. Run on a device or emulator.
