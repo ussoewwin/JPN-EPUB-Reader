@@ -4,11 +4,32 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.12
+
+### Manga EPUB Support (Image-native rendering)
+
+- **Feature:** Added native support for Manga-style EPUBs (image-only books).
+- **Performance:** Previously, image-heavy EPUBs loaded via text-rendering engines could lead to severe memory bloat, Out-Of-Memory (OOM) crashes, and pagination issues.
+- **Implementation:**
+  - **Detection:** `EpubParser` now detects Manga EPUBs (fixed-layout, pre-paginated, or purely image-based spine) and extracts image paths directly, skipping heavy text-node conversion.
+  - **MangaView:** A new `MangaView` component provides high-performance native rendering for full-page images, featuring a background-decoding pipeline, LRU bitmap caching, and touch-to-turn zones to ensure OOM-free navigation.
+  - **Engine Switching:** `ReaderActivity` dynamically switches the rendering engine at runtime. If a Manga EPUB is detected, `MangaView` takes over. Otherwise, it falls back to `VerticalEpubView` or `WebView`.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/epub/EpubBook.kt
+app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
+app/src/main/java/com/jpnepub/reader/manga/MangaView.kt
+app/src/main/java/com/jpnepub/reader/ui/ReaderActivity.kt
+app/src/main/res/layout/activity_reader.xml
+```
+
 ## v1.11
 
 ### Fragment-range subheading grouping for heavily-fragmented files
 
-- **Symptom:** In `金田一耕助ファイル20 病院坂の首縊りの家（下）` (and similar commercial EPUBs),
+- **Symptom:** In certain complex commercial EPUBs (especially those splitting single chapters across multiple files),
   sub-titles such as "一", "二", "三" were either missing from the TOC or, when shown,
   all jumped to the first occurrence instead of the correct chapter section.
   The TOC also displayed titles in a flat, duplicated list.
