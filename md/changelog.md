@@ -29,7 +29,7 @@ app/src/main/res/layout/activity_reader.xml
 
 ### Fragment-range subheading grouping for heavily-fragmented files
 
-- **Symptom:** In certain complex commercial EPUBs (especially those splitting single chapters across multiple files),
+- **Symptom:** In certain complex EPUBs (especially those splitting single chapters across multiple files),
   sub-titles such as "一", "二", "三" were either missing from the TOC or, when shown,
   all jumped to the first occurrence instead of the correct chapter section.
   The TOC also displayed titles in a flat, duplicated list.
@@ -87,7 +87,7 @@ app/src/main/java/com/jpnepub/reader/vrender/VerticalLayoutEngine.kt
 
 ### TOC subheadings — support `<p class="font-1emNN">` pattern and force page breaks
 
-- **Symptom:** In some commercial EPUBs, chapter-level sub-titles formatted as
+- **Symptom:** In some EPUBs, chapter-level sub-titles formatted as
   `<p class="font-1emNN">` (e.g. `font-1em30`) were missing from the table of
   contents. When they did appear, they were not preceded by a page break, so
   the sub-title flowed into the preceding paragraph instead of starting a new
@@ -141,7 +141,7 @@ app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
 
 ### TOC extraction — ignore page-list and landmarks navs
 
-- **Symptom:** Some commercial EPUBs showed a mix of real chapter titles
+- **Symptom:** Some EPUBs showed a mix of real chapter titles
   and bare numeric entries (`2`, `3`, `6`, `7`, …, 50-range, etc.) in
   the table-of-contents dialog, and tapping those numeric rows either
   navigated to wrong pages or appeared as spurious rows in the parent
@@ -345,7 +345,7 @@ app/src/main/java/com/jpnepub/reader/vrender/ContentExtractor.kt
 
 - **Problem:** All small bitmaps were treated as inline gaiji whenever
   both sides were ≤ 256 px. Illustrations marked `class="inline_01"`
-  (e.g. tall narrow plates around 76 × 128 px in some commercial EPUBs)
+  (e.g. tall narrow plates around 76 × 128 px in some EPUBs)
   were shrunk to a single em-box and looked like a tiny stamp next to the
   text.
 - **Fix:** `ContentNode.Image` now carries the `<img>` / SVG `<image>`
