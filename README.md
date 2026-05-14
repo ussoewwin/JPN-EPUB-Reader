@@ -65,9 +65,8 @@ slapped on. It is a custom `View` that:
 - Tap-zone page turning: left third = previous page, right third =
   next page, center = toggle menu bars. Direction is swappable to
   match right-to-left reading of Japanese books.
-- EPUB spine boundary handling: tapping "previous" from the first
-  page of a chapter transparently loads the previous chapter and
-  starts you on its last page.
+- Support for bundled-volume EPUBs, heavily fragmented files, and synthetic TOC subheading generation.
+- **Native Manga Support:** High-performance, OOM-free native `MangaView` rendering for image-only Manga EPUBs with background decoding and LRU caching.
 
 ## Build
 
@@ -96,10 +95,13 @@ The resulting APK is named `JPN-EPUB-Reader-1.0.0-debug.apk` under
 ```
 app/src/main/java/com/jpnepub/reader/
 +-- epub/
-|   +-- EpubParser.kt          EPUB parsing, encoding detection
+|   +-- EpubParser.kt          EPUB parsing, encoding detection, Manga detection
+|   +-- EpubBook.kt            EPUB metadata and resource index
 +-- renderer/
 |   +-- EpubRenderer.kt        HTML preparation for the WebView
 |   +-- ReaderConfig.kt        Reader settings (persisted)
++-- manga/
+|   +-- MangaView.kt           High-performance native Manga viewer
 +-- vrender/
 |   +-- ContentNode.kt         Semantic content unit (TextRun / Ruby / Image / breaks)
 |   +-- ContentExtractor.kt    XHTML -> ContentNode conversion
@@ -108,7 +110,7 @@ app/src/main/java/com/jpnepub/reader/
 +-- ui/
     +-- MainActivity.kt        Bookshelf screen
     +-- BookshelfAdapter.kt    Bookshelf list
-    +-- ReaderActivity.kt      Reader screen
+    +-- ReaderActivity.kt      Reader screen (dynamically routes to MangaView or text engines)
 ```
 
 ## Root causes of mojibake and how this project fixes each one
@@ -126,7 +128,7 @@ app/src/main/java/com/jpnepub/reader/
 ## Changelog
 
 See [`md/changelog.md`](md/changelog.md) for the full release history.
-The most recent release is **v1.11**.
+The most recent release is **v1.12**.
 
 ## License
 
