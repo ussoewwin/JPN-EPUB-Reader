@@ -4,6 +4,20 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.14
+
+### EpubParser — skip manga detection for text chapters with inline images
+
+- **Summary:** Some vertical-fiction EPUBs place body text and inline illustrations in the same spine XHTML. `extractMangaPages()` treated any spine item with `<img>` or SVG `<image>` as a manga page, so prose chapters with art were counted toward the manga ratio. When more than 80% of spine items matched, `detectManga()` set `isManga=true` and `ReaderActivity` opened the book in `MangaView`, showing images only and hiding the text WebView.
+- **Root cause:** Manga page extraction did not distinguish image-only spine pages from text-plus-illustration chapters (the same idea as `EpubRenderer.isImageOnlyPage`: an image in `<body>` but stripped text under 50 characters).
+- **Fix:** Added `isImageOnlySpinePage()` and gated `extractMangaPages()` so only image-only spine items contribute image paths to manga detection.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
+```
+
 ## v1.13
 
 ### TOC — chapter links from in-book TOC pages
