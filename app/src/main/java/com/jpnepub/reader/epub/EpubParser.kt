@@ -538,6 +538,8 @@ class EpubParser(private val context: Context) {
         val fragId: String,
         /** 見出しレベル。h1=1, h2=2, ..., h6=6。font-1em 小見出しは 2。 */
         val level: Int,
+        /** 目次ページの `<a href="other.xhtml#id">` など、別ファイルを指す解決済み href。 */
+        val resolvedHref: String? = null,
     )
 
     /**
@@ -597,7 +599,7 @@ class EpubParser(private val context: Context) {
             val data = resources[sp.href] ?: return emptyList<RawSubheading>().also {
                 scanCache[sp.href] = it
             }
-            if (!bytesMightContainSubheading(data)) {
+            if (!bytesMightContainSubheading(data) && !bytesMightContainTocPageLinks(data)) {
                 return emptyList<RawSubheading>().also { scanCache[sp.href] = it }
             }
             val xhtml = decodeWithDetection(data)
@@ -682,13 +684,15 @@ class EpubParser(private val context: Context) {
                     // 親と同じタイトルはスキップ
                     if (sub.plainTitle.trim() == entry.title.trim()) continue
 
+                    val childHref = sub.resolvedHref ?: if (sub.fragId.isNotEmpty()) {
+                        "${sp.href}#${sub.fragId}"
+                    } else {
+                        sp.href
+                    }
                     val prev = subs.lastOrNull()
                     if (prev != null &&
                         prev.title == sub.plainTitle &&
-                        prev.href == sp.href) continue
-                    val childHref = if (sub.fragId.isNotEmpty()) {
-                        "${sp.href}#${sub.fragId}"
-                    } else sp.href
+                        prev.href == childHref) continue
                     subs.add(
                         TocEntry(
                             title = sub.plainTitle,
@@ -730,6 +734,44 @@ class EpubParser(private val context: Context) {
         return false
     }
 
+    /** 富士見新装版など、目次 XHTML 内の `other.xhtml#anchor` リンクから章名を拾う候補。 */
+    private fun bytesMightContainTocPageLinks(data: ByteArray): Boolean {
+        var count = 0
+        var from = 0
+        while (count < 4) {
+            val idx = indexOfAsciiFrom(data, ".xhtml#", from)
+            if (idx < 0) break
+            count++
+            from = idx + 1
+        }
+        return count >= 4
+    }
+
+    private fun indexOfAsciiFrom(haystack: ByteArray, needle: String, start: Int): Int {
+        if (needle.isEmpty()) return start.coerceAtMost(haystack.size)
+        val n = needle.length
+        val h = haystack.size
+        if (h < n || start > h - n) return -1
+        val first = needle[0].code.toByte()
+        var i = start.coerceAtLeast(0)
+        while (i <= h - n) {
+            if (haystack[i] == first) {
+                var ok = true
+                var j = 1
+                while (j < n) {
+                    if (haystack[i + j] != needle[j].code.toByte()) {
+                        ok = false
+                        break
+                    }
+                    j++
+                }
+                if (ok) return i
+            }
+            i++
+        }
+        return -1
+    }
+
     private fun indexOfAscii(haystack: ByteArray, needle: String): Int {
         if (needle.isEmpty()) return 0
         val n = needle.length
@@ -753,6 +795,49 @@ class EpubParser(private val context: Context) {
     }
 
     /**
+     * 目次 XHTML 内の `<a href="chapter.xhtml#anchor">章名</a>` から章 TOC を構築する。
+     */
+    private fun parseTocPageChapterLinks(
+        xhtml: String,
+        chapterDir: String,
+    ): List<RawSubheading> {
+        val linkPattern = Regex(
+            """<a\b[^>]*href\s*=\s*"([^"]+)"[^>]*>([\s\S]*?)</a>""",
+            RegexOption.IGNORE_CASE
+        )
+        val out = mutableListOf<RawSubheading>()
+        val seen = HashSet<String>()
+        for (match in linkPattern.findAll(xhtml)) {
+            val rawHref = match.groupValues[1].trim()
+            if (!rawHref.contains('#') || rawHref.startsWith("#")) continue
+            if (rawHref.startsWith("http:") || rawHref.startsWith("https:") ||
+                rawHref.startsWith("mailto:")
+            ) {
+                continue
+            }
+            val resolved = resolveRelativePath(chapterDir, rawHref)
+            val parts = parseHeadingInner(match.groupValues[2], chapterDir) ?: continue
+            val plain = buildString {
+                for (p in parts) if (p is TitlePart.Text) append(p.text)
+            }.trim()
+            if (plain.isEmpty() || plain.length > 80) continue
+            val fragId = rawHref.substringAfter('#', "")
+            val key = "$resolved|$plain"
+            if (!seen.add(key)) continue
+            out.add(
+                RawSubheading(
+                    plainTitle = plain,
+                    parts = parts,
+                    fragId = fragId,
+                    level = 2,
+                    resolvedHref = resolved,
+                )
+            )
+        }
+        return out
+    }
+
+    /**
      * XHTML 全体を 1 回だけ走査して、取りうる小見出し候補をすべて返す。
      * 親 TOC エントリとの突き合わせ (id スキップ・重複除去) は呼び側で行う。
      * 結果は `attachSubheadingChildren` の `scanCache` で memoize される。
@@ -769,22 +854,6 @@ class EpubParser(private val context: Context) {
         val out = mutableListOf<RawSubheading>()
         val seen = HashSet<String>()
 
-        // 本の中の「目次ページ」は `<p><a href="..."><span class="font-1emNN">タイトル</span></a></p>`
-        // のように、本物の章 h タグと見分けが付かないことがある。そこから小見出しを拾うと、
-        // 子エントリ全部が「目次ページ自身」へのリンクに化けて、タップしても正しい章へ飛ばない。
-        // 判定ヒントとして:
-        //   1. `<body class="p-toc">` / "p-mokuji" / "p-contents" のような body クラス
-        //   2. `<body>` 内の `<a href="...">` のうち `#fragment` 付きリンクが 4 本以上ある、
-        //      かつ半数以上が「今読んでいるファイル以外」を指している
-        // のどちらかに該当すれば、このファイルからの小見出し抽出は丸ごと諦める。
-        val bodyClassRe = Regex("""<body\b[^>]*class\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
-        val bodyClass = bodyClassRe.find(xhtml)?.groupValues?.get(1)?.lowercase() ?: ""
-        val looksLikeTocByClass = bodyClass.contains("p-toc") ||
-            bodyClass.contains("p-mokuji") ||
-            bodyClass.contains("p-contents") ||
-            bodyClass.contains("mokuji") ||
-            bodyClass.contains("toc")
-        if (looksLikeTocByClass) return out
         val aHrefRe = Regex("""<a\b[^>]*href\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
         var totalLinks = 0
         var externalFragLinks = 0
@@ -796,9 +865,20 @@ class EpubParser(private val context: Context) {
             if (h.contains('#')) externalFragLinks++
         }
         if (externalFragLinks >= 4 && externalFragLinks * 2 >= totalLinks) {
-            // 本の目次ページと判断。本文由来の小見出しは 0 件で返す。
-            return out
+            return parseTocPageChapterLinks(xhtml, chapterDir)
         }
+
+        // 本の中の「目次ページ」は `<p><a href="..."><span class="font-1emNN">タイトル</span></a></p>`
+        // のように、本物の章 h タグと見分けが付かないことがある。そこから小見出しを拾うと、
+        // 子エントリ全部が「目次ページ自身」へのリンクに化けて、タップしても正しい章へ飛ばない。
+        val bodyClassRe = Regex("""<body\b[^>]*class\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+        val bodyClass = bodyClassRe.find(xhtml)?.groupValues?.get(1)?.lowercase() ?: ""
+        val looksLikeTocByClass = bodyClass.contains("p-toc") ||
+            bodyClass.contains("p-mokuji") ||
+            bodyClass.contains("p-contents") ||
+            bodyClass.contains("mokuji") ||
+            bodyClass.contains("toc")
+        if (looksLikeTocByClass) return out
 
         fun tryAdd(id: String, parts: List<TitlePart>, level: Int) {
             val plain = buildString {
