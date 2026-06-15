@@ -4,6 +4,12 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.15
+
+### Vertical renderer — inline gaiji vs illustration classification
+
+- **Summary:** Replaced hard-coded gaiji class whitelists with a score-based `ImageRoleClassifier` so small publisher token images (Fujimi `class_s3*` / `class_s3x*`) render as inline em-box gaiji instead of centered half-page illustrations. `ContentExtractor` now treats images inside `<ruby><rb>` as in-flow text so ruby-embedded symbols (e.g. element abbreviations) stay on the line with surrounding prose.
+
 ## v1.14
 
 ### EpubParser — skip manga detection for text chapters with inline images
