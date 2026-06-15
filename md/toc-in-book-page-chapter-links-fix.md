@@ -1,6 +1,6 @@
 # In-Book TOC Page Chapter Links — Detailed Technical Explanation
 
-## External-Fragment TOC Pages (Fujimi Shinsōban Pattern)
+## External-Fragment TOC Pages (Sparse-Nav Reprint Pattern)
 
 ---
 
@@ -8,7 +8,7 @@
 
 ### 1.1 Symptom
 
-On **Full Metal Panic! — Fighting Boy Meets Girl (Shinsōban)** and similar Fujimi Fantasy Bunko reprint EPUBs, opening **Settings → Table of contents** showed only three top-level entries:
+On **a commercial light-novel reprint EPUB** (nav lists only cover, in-book TOC, and colophon) and similar titles, opening **Settings → Table of contents** showed only three top-level entries:
 
 | # | Title (nav) | href |
 |---|-------------|------|
@@ -27,8 +27,10 @@ The TOC dialog should list chapter titles as **indented children** under the nav
 ### 1.3 Reference EPUB
 
 ```
-01フルメタル・パニック！戦うボーイ・ミーツ・ガール(新装版) フルメタル・パニック！(新装版) (富士見ファンタジア文庫).epub
+some-commercial-reprint.epub
 ```
+
+(Generic Japanese light-novel **reprint** with sparse `nav` / NCX and a dense in-book TOC page.)
 
 ---
 
@@ -60,7 +62,7 @@ Since **v1.06**, `findSubheadingsInXhtml()` contained an intentional guard:
 
 That guard fixed **v1.05-era pollution** where `font-1emNN` links inside TOC pages were mistaken for chapter subheadings and produced children that all pointed back at the TOC page itself.
 
-For Fujimi Shinsōban EPUBs, the **same heuristic** correctly identified `c2S.xhtml` as a TOC page — but then **discarded all chapter information** instead of **parsing the links as the chapter list**.
+For sparse-nav reprint EPUBs of this shape, the **same heuristic** correctly identified `c2S.xhtml` as a TOC page — but then **discarded all chapter information** instead of **parsing the links as the chapter list**.
 
 ### 2.3 Why `resolvedHref` was missing
 
@@ -83,7 +85,7 @@ Chapter links on the TOC page point to **other** files (`c50.xhtml#aCSR`). Witho
 ## 3. Design Goals
 
 1. **Parse** in-book TOC pages whose chapter list is a dense grid of `other.xhtml#anchor` links.
-2. **Preserve** v1.06 protection for `p-toc` / `font-1emNN`-style TOC pages (Kadokawa / bundled-volume pattern).
+2. **Preserve** v1.06 protection for `p-toc` / `font-1emNN`-style TOC pages (class-tagged in-book TOC / bundled-volume pattern).
 3. **Preserve** existing paths: nav-complete books, `font-1em` subheadings, heavily fragmented NCX (`spineUsage >= 2`), manga.
 4. **Minimal decode cost**: only enter the new path when byte-level hints suggest TOC-page links.
 
@@ -195,7 +197,7 @@ app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
 ### 6.4 `bytesMightContainTocPageLinks()` — new function (full)
 
 ```kotlin
-    /** 富士見新装版など、目次 XHTML 内の `other.xhtml#anchor` リンクから章名を拾う候補。 */
+    /** In-book TOC XHTML: many `other.xhtml#anchor` links (chapter list on TOC page). */
     private fun bytesMightContainTocPageLinks(data: ByteArray): Boolean {
         var count = 0
         var from = 0
@@ -360,15 +362,15 @@ app/src/main/java/com/jpnepub/reader/epub/EpubParser.kt
 
 | Pattern | `body` class | Link shape | Old result | New result |
 |---------|--------------|------------|------------|------------|
-| Fujimi Shinsōban (`c2S.xhtml`) | Not `p-toc` | Many `other.xhtml#` | Empty | **Chapter list from links** |
-| Kadokawa / bundled `p-toc` + `font-1em` | `p-toc` etc. | May also have many links | Empty (skip) | **Still empty** (class guard after link check — see note) |
+| Sparse-nav reprint (`c2S.xhtml`) | Not `p-toc` | Many `other.xhtml#` | Empty | **Chapter list from links** |
+| Class-tagged `p-toc` + `font-1em` | `p-toc` etc. | May also have many links | Empty (skip) | **Still empty** (class guard after link check — see note) |
 | Normal chapter XHTML | — | Few external `#` links | `h*` / `font-1em` scan | Unchanged |
 
-**Note on `p-toc` + external links:** If a file matches **both** the external-link threshold **and** `looksLikeTocByClass`, the external-link branch runs **first** and returns parsed links. Files with `p-toc` that **fail** the external-link ratio still hit `looksLikeTocByClass` and return empty — preserving v1.06 for the classic pollution case. Fujimi `c2S.xhtml` typically has **no** `p-toc` body class, so it takes the new parse path only.
+**Note on `p-toc` + external links:** If a file matches **both** the external-link threshold **and** `looksLikeTocByClass`, the external-link branch runs **first** and returns parsed links. Files with `p-toc` that **fail** the external-link ratio still hit `looksLikeTocByClass` and return empty — preserving v1.06 for the classic pollution case. Typical sparse-nav reprint TOC files (e.g. `c2S.xhtml`) have **no** `p-toc` body class, so they take the new parse path only.
 
 ---
 
-## 7. End-to-End Flow (FMP example)
+## 7. End-to-End Flow (sample reprint EPUB)
 
 ```
 nav entry "Table of contents" → href c2S.xhtml
@@ -401,12 +403,12 @@ tap → VerticalEpubView resolves OEBPS/c50.xhtml#aCSR → correct page
 - **Problem fixed:** `font-1emNN` rows inside `<a>` on TOC pages became bogus child TOC entries pointing at the TOC page.
 - **Mechanism:** `looksLikeTocByClass` + external-link empty return.
 - **This fix:** Splits the external-link case into two behaviors:
-  - **Link-dominated, non-class-tagged TOC pages (Fujimi)** → parse links.
+  - **Link-dominated, non-class-tagged TOC pages (sparse-nav reprint)** → parse links.
   - **`p-toc` + span-in-link pattern** → still skip `font-1em` extraction.
 
 ### v1.11 — Fragment-range subheading grouping
 
-- Orthogonal. Applies when `spineUsage >= 2` on the **same** XHTML file. FMP nav has `spineUsage == 1` for `c2S.xhtml`; fragment-range logic does not apply to the TOC page file itself.
+- Orthogonal. Applies when `spineUsage >= 2` on the **same** XHTML file. The sample reprint nav has `spineUsage == 1` for `c2S.xhtml`; fragment-range logic does not apply to the TOC page file itself.
 
 ---
 
@@ -447,17 +449,17 @@ Both must align for the new parser to run **and** the file must be in a parent�
 |------|------------|--------|
 | TOC page with &lt;4 chapter links | Low | No parse; same as before |
 | TOC links without `.xhtml` suffix (e.g. `.html#`) | Medium for nonstandard EPUBs | Byte gate and parser both miss |
-| Chapter list only in NCX fragments (Edogawa Ranpo style) | N/A | Already handled by nav/NCX + v1.11 fragment-range |
+| Chapter list only in NCX fragments (heavily fragmented NCX) | N/A | Already handled by nav/NCX + v1.11 fragment-range |
 
 ### 9.5 Regression testing matrix (recommended)
 
 | Test case | Expected |
 |-----------|----------|
-| FMP Fighting Boy Meets Girl (Shinsōban) | Chapter titles under “Table of contents”; tap jumps to chapter |
+| Sparse-nav reprint (sample above) | Chapter titles under “Table of contents”; tap jumps to chapter |
 | Bundled volume with `p-toc` + `font-1em` TOC page | No polluted children (v1.06 behavior) |
 | Nav-complete commercial EPUB | Unchanged top-level TOC |
 | `font-1em` subheading novel | Subheadings under correct parents |
-| Heavily fragmented NCX (Ranpo-style) | Fragment-scoped children only |
+| Heavily fragmented NCX | Fragment-scoped children only |
 | Manga EPUB | Image reader; TOC unchanged |
 
 **Status:** Logic reviewed by static analysis and `assembleDebug` build success. **On-device regression not yet recorded** in this document.
@@ -468,7 +470,7 @@ Both must align for the new parser to run **and** the file must be in a parent�
 
 | Item | Detail |
 |------|--------|
-| **Problem** | Fujimi-style EPUBs store chapter titles only as cross-file links on an in-book TOC XHTML; nav has 3 entries; TOC dialog showed no chapters |
+| **Problem** | Some reprint EPUBs store chapter titles only as cross-file links on an in-book TOC XHTML; nav has 3 entries; TOC dialog showed no chapters |
 | **Root cause** | v1.06 “skip TOC page” heuristic returned empty for link-dominated TOC files; no `resolvedHref`; byte pre-scan skipped TOC file |
 | **Fix** | Detect link-dominated TOC pages → `parseTocPageChapterLinks()`; store `resolvedHref`; extend byte pre-scan |
 | **Scope** | `EpubParser.kt` only |
