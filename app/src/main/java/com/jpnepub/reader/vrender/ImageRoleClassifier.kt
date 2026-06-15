@@ -26,6 +26,8 @@ internal object ImageRoleClassifier {
     )
 
     private val CLASS_S_SUFFIX_RE = Regex("^class_s([a-z0-9]+)-(\\d+)$")
+    /** 富士見系 EPUB: 外字 img は class_s3T 等 suffix 無し。挿絵は class_sKW-1 等。 */
+    private val CLASS_S_GAIJI_IMG_RE = Regex("^class_s3[a-z0-9]+$")
 
     fun classify(input: Input): Role {
         val tokens = tokenize(input.cssClass)
@@ -36,10 +38,10 @@ internal object ImageRoleClassifier {
         }
 
         val scores = ScoreBoard()
-        scoreExplicitClasses(tokens, input.dims, scores)
+        val explicitGaiji = scoreExplicitClasses(tokens, input.dims, scores)
         scoreWrapperPair(wrapperTokens, tokens, input.dims, scores)
         scoreFlowContext(input, scores)
-        scoreDimensions(input.dims, scores)
+        scoreDimensions(input.dims, scores, explicitGaiji)
         return scores.resolve()
     }
 
@@ -91,11 +93,16 @@ internal object ImageRoleClassifier {
         tokens: List<String>,
         dims: Pair<Int, Int>?,
         scores: ScoreBoard,
-    ) {
+    ): Boolean {
         if (tokens.any { it == "gaiji" || it.startsWith("gaiji-") }) {
             scores.addGaiji(100)
         }
-        if (tokens.any { it == "class_s3x" || it.startsWith("class_s3x-") }) {
+        val explicitGaijiClass = tokens.any {
+            CLASS_S_GAIJI_IMG_RE.matches(it) ||
+                it == "class_s3x" ||
+                it.startsWith("class_s3x-")
+        }
+        if (explicitGaijiClass) {
             scores.addGaiji(100)
         }
         if (tokens.any { it == "class_s1w" || it.startsWith("class_s1w-") }) {
@@ -133,6 +140,7 @@ internal object ImageRoleClassifier {
         if (tokens.any { it == "inline" || it.startsWith("inline_") || it.startsWith("inline-") }) {
             scores.addHalf(85)
         }
+        return explicitGaijiClass || tokens.any { it == "gaiji" || it.startsWith("gaiji-") }
     }
 
     private fun scoreWrapperPair(
@@ -181,6 +189,7 @@ internal object ImageRoleClassifier {
     private fun scoreDimensions(
         dims: Pair<Int, Int>?,
         scores: ScoreBoard,
+        explicitGaiji: Boolean,
     ) {
         if (dims == null) return
         val (iw, ih) = dims
@@ -209,10 +218,12 @@ internal object ImageRoleClassifier {
             }
         }
 
-        if (short >= 128 || area >= 32_000L) {
-            scores.addGaiji(-120)
-        } else if (short >= 96 || area >= 12_000L) {
-            scores.addGaiji(-60)
+        if (!explicitGaiji) {
+            if (short >= 128 || area >= 32_000L) {
+                scores.addGaiji(-120)
+            } else if (short >= 96 || area >= 12_000L) {
+                scores.addGaiji(-60)
+            }
         }
     }
 

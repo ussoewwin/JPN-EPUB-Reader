@@ -63,6 +63,8 @@ class ContentExtractor {
         // ルビは表示しない方針。<rt>/<rp> の内容だけは破棄したいので、そこだけフラグ管理する。
         var inRt = false
         var inRp = false
+        var rubyDepth = 0
+        var inRb = false
         // 脚注参照リンク (例: <a href="text00018.html#chushaku_013">（13）</a>) は
         // 読み手がジャンプできない本リーダーでは単なるノイズなので、その <a> 配下の
         // テキスト・画像をまるごと捨てる。
@@ -141,15 +143,12 @@ class ContentExtractor {
                         when (name) {
                             "script", "style", "head" -> skipDepth++
                             "ruby" -> {
-                                // ルビはレイアウトしない。ruby 内の基字は通常の流し込み
-                                // (textBuffer) にそのまま乗せ、<rt>/<rp> だけ破棄する。
-                                // 旧実装は別バッファ rubyBase に溜めて \n 混入や順序問題を
-                                // 引き起こしていたので完全にやめた。
                                 flushText()
+                                rubyDepth++
                             }
                             "rt" -> inRt = true
                             "rp" -> inRp = true
-                            "rb" -> { /* 基字はそのまま textBuffer に流れる */ }
+                            "rb" -> inRb = true
                             "br" -> {
                                 if (headingLevel == 0) {
                                     flushText()
@@ -173,7 +172,7 @@ class ContentExtractor {
                                 if (footnoteAnchorDepth == 0 && src.isNotEmpty() && !src.startsWith("data:")) {
                                     val resolved = resolveRelativePath(chapterDir, src)
                                     if (headingLevel == 0) {
-                                        val inlineInText = textBuffer.isNotEmpty()
+                                        val inlineInText = textBuffer.isNotEmpty() || inRb
                                         flushText()
                                         val wrapperClass = blockClassStack.lastOrNull() ?: ""
                                         nodes.add(
@@ -201,7 +200,7 @@ class ContentExtractor {
                                 if (footnoteAnchorDepth == 0 && href.isNotEmpty() && !href.startsWith("data:")) {
                                     val resolved = resolveRelativePath(chapterDir, href)
                                     if (headingLevel == 0) {
-                                        val inlineInText = textBuffer.isNotEmpty()
+                                        val inlineInText = textBuffer.isNotEmpty() || inRb
                                         flushText()
                                         val wrapperClass = blockClassStack.lastOrNull() ?: ""
                                         nodes.add(
@@ -301,14 +300,12 @@ class ContentExtractor {
                         when (name) {
                             "script", "style", "head" -> if (skipDepth > 0) skipDepth--
                             "ruby" -> {
-                                // ruby 閉じ時は基字側を flush する。flushText の
-                                // 「非 ASCII 隣接スペース除去」規則で、EPUB3 複合ルビの
-                                //   <ruby>\n<rb>桟</rb> <rt>さん</rt> <rb>橋</rb>\n</ruby>
-                                // のようにタグ間にある整形空白が自動で落ちる。
                                 flushText()
+                                if (rubyDepth > 0) rubyDepth--
                             }
                             "rt" -> inRt = false
                             "rp" -> inRp = false
+                            "rb" -> inRb = false
                             "a" -> {
                                 if (anchorFootnoteStack.isNotEmpty()) {
                                     val wasFootnote = anchorFootnoteStack.removeLast()
