@@ -275,6 +275,26 @@ class EpubParser(private val context: Context) {
     }
 
     /**
+     * 表紙・挿絵専用ページ（画像メインで本文テキストがほぼ無い）かを判定。
+     * EpubRenderer.isImageOnlyPage と同じ基準（本文50字未満）。
+     */
+    private fun isImageOnlySpinePage(html: String): Boolean {
+        val bodyMatch = Regex(
+            """<body[^>]*>([\s\S]*?)</body>""",
+            RegexOption.IGNORE_CASE
+        ).find(html) ?: return false
+        val bodyContent = bodyMatch.groupValues[1]
+        val hasImageOrSvg = bodyContent.contains("<img", ignoreCase = true) ||
+            bodyContent.contains("<svg", ignoreCase = true) ||
+            bodyContent.contains("<image", ignoreCase = true)
+        if (!hasImageOrSvg) return false
+        val textOnly = bodyContent
+            .replace(Regex("""<[^>]+>"""), "")
+            .replace(Regex("""\s+"""), "")
+        return textOnly.length < 50
+    }
+
+    /**
      * For each spine item, attempt to extract the single full-page image path.
      * Manga EPUBs typically wrap each page image in:
      *   `<svg><image xlink:href="ImageNNNNN.jpg"/></svg>`
@@ -326,6 +346,11 @@ class EpubParser(private val context: Context) {
                 return@map ""
             }
             val chapterDir = item.href.substringBeforeLast('/', "")
+
+            // 本文付き章に挿絵 <img> があるだけでは漫画ページ扱いにしない
+            if (!isImageOnlySpinePage(text)) {
+                return@map ""
+            }
 
             // Try SVG <image> first (most common manga EPUB pattern)
             val svgMatch = svgImageRe.find(text)
