@@ -20,7 +20,14 @@ sealed class ContentNode {
      * `gaiji` / `gaiji-line` / `gaiji-wide` 等の class で「文字相当の外字」と
      * 「ページ図版」を区別している事が多いため、レイアウト判定に使う。
      */
-    data class Image(val src: String, val cssClass: String = "") : ContentNode()
+    data class Image(
+        val src: String,
+        val cssClass: String = "",
+        /** 直近の祖先 [div]/[section] の class。figure ラッパー判定に使う。 */
+        val wrapperClass: String = "",
+        /** <p> 内で直前に地の文があり、行内に挿入された画像か。 */
+        val inlineInText: Boolean = false,
+    ) : ContentNode()
 
     /** 段落区切り (新しい行=縦書きでは新しいカラムを開始、行頭字下げあり)。 */
     object ParaBreak : ContentNode()

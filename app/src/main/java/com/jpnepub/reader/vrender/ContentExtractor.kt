@@ -88,6 +88,9 @@ class ContentExtractor {
         // 章内ジャンプがファイル先頭ではなく該当ページに飛ぶようになる。
         val pStack = ArrayDeque<PFrame>()
         var pSpanOrdinal = 0
+        // 直近の block コンテナ (div/section/article) の class スタック。
+        // <div class="class_sN-0"><img class="class_sN-1"> のようなラッパー判定に使う。
+        val blockClassStack = ArrayDeque<String>()
 
         fun flushHeadingText() {
             if (headingBuffer.isEmpty()) return
@@ -170,8 +173,17 @@ class ContentExtractor {
                                 if (footnoteAnchorDepth == 0 && src.isNotEmpty() && !src.startsWith("data:")) {
                                     val resolved = resolveRelativePath(chapterDir, src)
                                     if (headingLevel == 0) {
+                                        val inlineInText = textBuffer.isNotEmpty()
                                         flushText()
-                                        nodes.add(ContentNode.Image(resolved, cssClass))
+                                        val wrapperClass = blockClassStack.lastOrNull() ?: ""
+                                        nodes.add(
+                                            ContentNode.Image(
+                                                src = resolved,
+                                                cssClass = cssClass,
+                                                wrapperClass = wrapperClass,
+                                                inlineInText = inlineInText,
+                                            )
+                                        )
                                     } else {
                                         flushHeadingText()
                                         headingParts.add(ContentNode.HeadingPart.Image(resolved))
@@ -189,8 +201,17 @@ class ContentExtractor {
                                 if (footnoteAnchorDepth == 0 && href.isNotEmpty() && !href.startsWith("data:")) {
                                     val resolved = resolveRelativePath(chapterDir, href)
                                     if (headingLevel == 0) {
+                                        val inlineInText = textBuffer.isNotEmpty()
                                         flushText()
-                                        nodes.add(ContentNode.Image(resolved, cssClass))
+                                        val wrapperClass = blockClassStack.lastOrNull() ?: ""
+                                        nodes.add(
+                                            ContentNode.Image(
+                                                src = resolved,
+                                                cssClass = cssClass,
+                                                wrapperClass = wrapperClass,
+                                                inlineInText = inlineInText,
+                                            )
+                                        )
                                     } else {
                                         flushHeadingText()
                                         headingParts.add(ContentNode.HeadingPart.Image(resolved))
@@ -224,6 +245,10 @@ class ContentExtractor {
                             // 段落区切りに使うと、<div>駒</div><div>形</div>... のような
                             // 1文字ずつ装飾目的で div 化された EPUB が各文字独立カラムに
                             // なってしまう。段落扱いは p / 箇条書き等に限定する。
+                            "div", "section", "article" -> {
+                                val blockClass = parser.getAttributeValue(null, "class") ?: ""
+                                blockClassStack.addLast(blockClass)
+                            }
                             "p", "li", "blockquote", "pre" -> {
                                 if (headingLevel == 0) emitParaBreak()
                                 if (name == "p") {
@@ -313,9 +338,12 @@ class ContentExtractor {
                                     }
                                 }
                             }
-                            "p" -> {
+                            "p", "li", "blockquote", "pre" -> {
                                 if (headingLevel == 0) emitParaBreak()
-                                if (pStack.isNotEmpty()) pStack.removeLast()
+                                if (name == "p" && pStack.isNotEmpty()) pStack.removeLast()
+                            }
+                            "div", "section", "article" -> {
+                                if (blockClassStack.isNotEmpty()) blockClassStack.removeLast()
                             }
                         }
                     }

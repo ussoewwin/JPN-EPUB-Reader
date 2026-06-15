@@ -157,7 +157,7 @@ class VerticalLayoutEngine(
             pendingAnchorIds.clear()
         }
 
-        for (node in content) {
+        for ((nodeIndex, node) in content.withIndex()) {
             when (node) {
                 is ContentNode.TextRun -> {
                     val chars = node.text
@@ -259,64 +259,27 @@ class VerticalLayoutEngine(
                     }
                 }
                 is ContentNode.Image -> {
-                    // 画像を 3 種に分類する:
-                    //   GAIJI    : 文字相当の外字 → 本文中に em-box でインライン
-                    //   FULLPAGE : 表紙/扉/全面図版 → ページ全面に拡大
-                    //   HALFPAGE : 本文挿絵       → ページ中央に半分以下で
-                    //
-                    // 判定の第一優先は <img class="..."> の値。日本の電子書籍
-                    //   ソース HTML では class に gaiji / gaiji-line / gaiji-wide を文字大、
-                    //   pagefit / page80 / fit / cover / full を全面、
-                    //   inline / inline_01 / inline_001 を半分挿絵として
-                    //   申告している事が多い。
-                    //   一部 EPUB は class_sH- / class_s28- が 1×1 トラッキング、
-                    //   その他の class_s* は外字 (挿絵ではない)。
-                    //
-                    // 第二優先は寸法。class が無い (古い EPUB / 表紙の bare img 等)
-                    //   場合のフォールバックで、
-                    //     ・両辺 3〜64px      → 外字
-                    //     ・短辺 ≥ 600px     → 全面 (表紙級)
-                    //     ・それ以外             → 半分挿絵
-                    val tokens = node.cssClass.lowercase().split(Regex("\\s+"))
-                        .filter { it.isNotEmpty() }
-                    val isClassSTracking = tokens.any { t ->
-                        t.startsWith("class_sh-") || t.startsWith("class_s28-")
-                    }
-                    val isClassSGaiji = tokens.any { t ->
-                        t.startsWith("class_s") &&
-                            !t.startsWith("class_sh-") &&
-                            !t.startsWith("class_s28-")
-                    }
-                    val isGaijiClass = tokens.any { it == "gaiji" || it.startsWith("gaiji-") } ||
-                        isClassSGaiji
-                    val isFullPageClass = tokens.any { t ->
-                        t == "fit" || t == "cover" || t == "full" ||
-                            t.startsWith("pagefit") || t.startsWith("page80") ||
-                            t.startsWith("page-") || t == "fullpage" || t == "full-page"
-                    }
-                    val isHalfPageClass = tokens.any { t ->
-                        t == "inline" || t.startsWith("inline_") || t.startsWith("inline-")
-                    }
+                    // ImageRoleClassifier が class / ラッパー / 行内文脈 / 寸法 / 前後ノードを
+                    // 総合して GAIJI / FULLPAGE / HALFPAGE / SKIP を決める。
                     val dims = imageSizeResolver(node.src)
-                    if (isClassSTracking ||
-                        (dims != null && dims.first <= 2 && dims.second <= 2)
-                    ) {
-                        // トラッキング用 1×1 ピクセルは描画しない。
+                    val role = ImageRoleClassifier.classify(
+                        ImageRoleClassifier.Input(
+                            cssClass = node.cssClass,
+                            wrapperClass = node.wrapperClass,
+                            inlineInText = node.inlineInText,
+                            dims = dims,
+                            prevNode = content.getOrNull(nodeIndex - 1),
+                            nextNode = content.getOrNull(nodeIndex + 1),
+                        )
+                    )
+                    if (role == ImageRoleClassifier.Role.SKIP) {
+                        // トラッキング用 1×1 ピクセル等は描画しない。
                     } else {
-                    val classification = when {
-                        isGaijiClass -> ImageClass.GAIJI
-                        isFullPageClass -> ImageClass.FULLPAGE
-                        isHalfPageClass -> ImageClass.HALFPAGE
-                        dims != null -> {
-                            val (iw, ih) = dims
-                            val shortSide = minOf(iw, ih)
-                            when {
-                                iw in 3..64 && ih in 3..64 -> ImageClass.GAIJI
-                                shortSide >= 600 -> ImageClass.FULLPAGE
-                                else -> ImageClass.HALFPAGE
-                            }
-                        }
-                        else -> ImageClass.HALFPAGE
+                    val classification = when (role) {
+                        ImageRoleClassifier.Role.GAIJI -> ImageClass.GAIJI
+                        ImageRoleClassifier.Role.FULLPAGE -> ImageClass.FULLPAGE
+                        ImageRoleClassifier.Role.HALFPAGE -> ImageClass.HALFPAGE
+                        ImageRoleClassifier.Role.SKIP -> ImageClass.HALFPAGE
                     }
                     val isInlineGaiji = classification == ImageClass.GAIJI
 
