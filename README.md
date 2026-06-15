@@ -49,15 +49,38 @@ slapped on. It is a custom `View` that:
   (!, ?, %) to their full-width counterparts so numerals read
   naturally upright in a vertical column.
 - Supports inline gaiji (external / legacy-form kanji) images that
-  most Japanese e-books use: any image at most 256x256 px is treated as
-  an inline character and sized to the em-box; anything larger is
-  treated as a full-page illustration.
+  most Japanese e-books use. `VerticalLayoutEngine` reads each
+  `<img>` / SVG `<image>` `class` and classifies the bitmap as
+  **GAIJI** (character-sized inline in the em-box), **FULLPAGE**
+  (cover / full-bleed plate), or **HALFPAGE** (centered body
+  illustration). Publisher classes such as `gaiji`, `gaiji-line`,
+  `fit`, `cover`, and `inline_01` are honoured first; small
+  unclassified bitmaps fall back to dimension heuristics so tall
+  plates are not shrunk to a single character slot.
 
 ### Reader features
 
-- EPUB 2 and EPUB 3.
+- EPUB 2 and EPUB 3, including books opened via `content://` URIs
+  (OPF discovery uses a cache-temp `ZipFile` pipeline with tolerant
+  path resolution).
+- **Table of contents:** EPUB3 `nav` / NCX hierarchy; page-list and
+  landmark navs are ignored. Synthetic subheadings for `<h*>` and
+  `font-1emNN` patterns without `id`; fragment-range grouping for
+  heavily fragmented spines; chapter lists parsed from in-book TOC
+  pages (sparse-nav commercial reprints with cross-file links only in
+  the body TOC).
 - Chapter navigation: previous / next chapter and a table-of-contents
   jump.
+- **Rendering routes** (chosen when the book opens):
+  - **VerticalEpubView** — native Canvas vertical typesetter (default
+    for Japanese vertical fiction).
+  - **MangaView** — image-only manga EPUBs (fixed-layout,
+    pre-paginated, or image-only spine) with background decode and
+    LRU bitmap cache.
+  - **WebView** — horizontal writing mode.
+  Manga detection counts only image-only spine pages, so vertical
+  fiction with body text plus inline illustrations stays on the text
+  engine instead of opening in `MangaView`.
 - Font size: 12-32 sp, persisted across sessions.
 - Dark mode.
 - Bold text toggle (uses real bold glyphs from Noto Serif CJK JP when
@@ -65,8 +88,6 @@ slapped on. It is a custom `View` that:
 - Tap-zone page turning: left third = previous page, right third =
   next page, center = toggle menu bars. Direction is swappable to
   match right-to-left reading of Japanese books.
-- Support for bundled-volume EPUBs, heavily fragmented files, and synthetic TOC subheading generation.
-- **Native Manga Support:** High-performance, OOM-free native `MangaView` rendering for image-only Manga EPUBs with background decoding and LRU caching.
 
 ## Build
 
@@ -95,7 +116,7 @@ The resulting APK is named `JPN-EPUB-Reader-1.0.0-debug.apk` under
 ```
 app/src/main/java/com/jpnepub/reader/
 +-- epub/
-|   +-- EpubParser.kt          EPUB parsing, encoding detection, Manga detection
+|   +-- EpubParser.kt          EPUB parse, TOC, encoding, manga detection
 |   +-- EpubBook.kt            EPUB metadata and resource index
 +-- renderer/
 |   +-- EpubRenderer.kt        HTML preparation for the WebView
@@ -128,6 +149,8 @@ app/src/main/java/com/jpnepub/reader/
 ## Changelog
 
 See [`md/changelog.md`](md/changelog.md) for the full release history.
+
+Latest release: **[v1.14](https://github.com/ussoewwin/JPN-EPUB-Reader/releases/tag/v1.14)** — manga detection no longer treats vertical-fiction chapters with inline illustrations as image-only manga.
 
 ## License
 
