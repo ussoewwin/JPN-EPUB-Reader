@@ -150,8 +150,6 @@ app/src/main/java/com/jpnepub/reader/
 
 See [`md/changelog.md`](md/changelog.md) for the full release history.
 
-Latest release: **[v1.14](https://github.com/ussoewwin/JPN-EPUB-Reader/releases/tag/v1.14)** — manga detection no longer treats vertical-fiction chapters with inline illustrations as image-only manga.
-
 ## License
 
 MIT License.
