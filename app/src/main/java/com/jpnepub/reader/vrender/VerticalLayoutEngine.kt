@@ -68,7 +68,7 @@ class VerticalLayoutEngine(
     private val paddingBottom: Int,
     private val lineHeightRatio: Float = 1.0f,   // 文字送り量 (em単位, 1.0=詰め)
     private val columnGapRatio: Float = 0.4f,    // カラム間アキ (em単位)
-    // 自動段落インデントは 0 にする。日本語EPUBの publisher は通常
+    // 自動段落インデントは 0 にする。多くの日本語 EPUB では
     // 段落冒頭に "　" (U+3000 全角空白) を明示的に置いているため、
     // 自動で追加するとインデントが二重になる。
     private val paraIndentEm: Float = 0.0f,
@@ -265,19 +265,30 @@ class VerticalLayoutEngine(
                     //   HALFPAGE : 本文挿絵       → ページ中央に半分以下で
                     //
                     // 判定の第一優先は <img class="..."> の値。日本の電子書籍
-                    //   publisher は gaiji / gaiji-line / gaiji-wide を文字大、
+                    //   ソース HTML では class に gaiji / gaiji-line / gaiji-wide を文字大、
                     //   pagefit / page80 / fit / cover / full を全面、
                     //   inline / inline_01 / inline_001 を半分挿絵として
                     //   申告している事が多い。
+                    //   一部 EPUB は class_sH- / class_s28- が 1×1 トラッキング、
+                    //   その他の class_s* は外字 (挿絵ではない)。
                     //
                     // 第二優先は寸法。class が無い (古い EPUB / 表紙の bare img 等)
                     //   場合のフォールバックで、
-                    //     ・両辺 ≤ 64px        → 外字
+                    //     ・両辺 3〜64px      → 外字
                     //     ・短辺 ≥ 600px     → 全面 (表紙級)
                     //     ・それ以外             → 半分挿絵
                     val tokens = node.cssClass.lowercase().split(Regex("\\s+"))
                         .filter { it.isNotEmpty() }
-                    val isGaijiClass = tokens.any { it == "gaiji" || it.startsWith("gaiji-") }
+                    val isClassSTracking = tokens.any { t ->
+                        t.startsWith("class_sh-") || t.startsWith("class_s28-")
+                    }
+                    val isClassSGaiji = tokens.any { t ->
+                        t.startsWith("class_s") &&
+                            !t.startsWith("class_sh-") &&
+                            !t.startsWith("class_s28-")
+                    }
+                    val isGaijiClass = tokens.any { it == "gaiji" || it.startsWith("gaiji-") } ||
+                        isClassSGaiji
                     val isFullPageClass = tokens.any { t ->
                         t == "fit" || t == "cover" || t == "full" ||
                             t.startsWith("pagefit") || t.startsWith("page80") ||
@@ -287,6 +298,11 @@ class VerticalLayoutEngine(
                         t == "inline" || t.startsWith("inline_") || t.startsWith("inline-")
                     }
                     val dims = imageSizeResolver(node.src)
+                    if (isClassSTracking ||
+                        (dims != null && dims.first <= 2 && dims.second <= 2)
+                    ) {
+                        // トラッキング用 1×1 ピクセルは描画しない。
+                    } else {
                     val classification = when {
                         isGaijiClass -> ImageClass.GAIJI
                         isFullPageClass -> ImageClass.FULLPAGE
@@ -295,7 +311,7 @@ class VerticalLayoutEngine(
                             val (iw, ih) = dims
                             val shortSide = minOf(iw, ih)
                             when {
-                                iw in 1..64 && ih in 1..64 -> ImageClass.GAIJI
+                                iw in 3..64 && ih in 3..64 -> ImageClass.GAIJI
                                 shortSide >= 600 -> ImageClass.FULLPAGE
                                 else -> ImageClass.HALFPAGE
                             }
@@ -393,6 +409,7 @@ class VerticalLayoutEngine(
                         rowY = firstRowBaseline
                         isFirstGlyphOfColumn = true
                         pendingParaIndent = false
+                    }
                     }
                 }
                 is ContentNode.ParaBreak -> {

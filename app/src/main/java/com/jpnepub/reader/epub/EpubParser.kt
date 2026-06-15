@@ -413,7 +413,7 @@ class EpubParser(private val context: Context) {
         // `〓` 等で潰れていた外字を画像断片として復元する。
         val enriched = baseEntries.map { enrichTocEntryWithBodyHeading(it, opfDir, resources) }
         // NCX/nav が平坦で「部」だけを列挙しているが、本文に小タイトルが
-        // 独自スタイルで埋め込まれている EPUB (Kadokawa など) のために、
+        // 独自スタイルで埋め込まれている EPUB (font-1em 小見出しなど) のために、
         // 各エントリの間の spine を走査して小見出しを拾い、children に詰める。
         return attachSubheadingChildren(enriched, spine, resources)
     }
@@ -573,7 +573,7 @@ class EpubParser(private val context: Context) {
      *
      * 小見出しの検出対象:
      *   (a) 親に使われていない `<h1>`〜`<h6>` 要素 (id 一致で除外)。
-     *   (b) Kadokawa 等の商業 EPUB 慣習である
+     *   (b) 一部の商業 EPUB で使われる
      *       `<p>…<span class="font-1emNN">…</span>…</p>` パターン。
      *       NN は `font-1emNN` クラスの数字で、1.15em〜1.49em の範囲のもののみ
      *       採用する (1.50em 以上は「部」クラスの大見出しで既に親が持っている)。
@@ -605,8 +605,8 @@ class EpubParser(private val context: Context) {
         // NCX/nav が同じ XHTML ファイルを `#fragment` で既に何度も指している
         // (= そのファイルの中の章はすでに TOC に全部載っている) なら、
         // そのファイルに対して小見出しを探しに行く必要はない。
-        // 江戸川乱歩全集のような合本形式では 1 ファイルに 10〜20 の
-        // NCX エントリがぶら下がっているため、これを外すと決定的に重い。
+        // 1 ファイルに 10〜20 件の NCX エントリがぶら下がる合本形式では、
+        // これを外すと決定的に重い。
         val spineUsage = HashMap<String, Int>()
         for (e in entries) {
             val spIdx = matchSpineIdx(e.href)
@@ -759,7 +759,7 @@ class EpubParser(private val context: Context) {
         return false
     }
 
-    /** 富士見新装版など、目次 XHTML 内の `other.xhtml#anchor` リンクから章名を拾う候補。 */
+    /** 目次 XHTML 内の `other.xhtml#anchor` リンクから章名を拾う候補。 */
     private fun bytesMightContainTocPageLinks(data: ByteArray): Boolean {
         var count = 0
         var from = 0
@@ -966,7 +966,7 @@ class EpubParser(private val context: Context) {
                 val pInner = pMatch.groupValues[2]
 
                 // <p> 自体に font-1emNN クラスを持つパターンを先に判定。
-                // <p class="font-1em30">頬に傷のある男</p> 等。
+                // <p class="font-1em30">…</p> 等。
                 val pClass = extractAttr(pAttrs, "class")
                 val pEmNum = extractFontEmNum(pClass)
                 if (pEmNum != null && pEmNum in 15..49) {

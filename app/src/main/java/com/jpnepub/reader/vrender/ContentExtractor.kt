@@ -230,7 +230,7 @@ class ContentExtractor {
                                     val pClass = parser.getAttributeValue(null, "class") ?: ""
                                     val pEmNum = extractFontEmNum(pClass)
                                     val frame = PFrame(hasExplicitId = elemId.isNotEmpty())
-                                    // <p class="font-1emNN"> パターン (例: Kadokawa の小見出し)
+                                    // <p class="font-1emNN"> パターン (font-1em 小見出し)
                                     // EpubParser.findSubheadingsInXhtml と同じ範囲 (15〜49) を
                                     // 採用し、同じ pSpanOrdinal で __ps<N> を割り当てる。
                                     if (pEmNum != null && pEmNum in 15..49 &&
