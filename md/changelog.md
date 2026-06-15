@@ -4,6 +4,13 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.13
+
+### TOC — chapter links from in-book TOC pages
+
+- **Summary:** Some commercial EPUBs (especially Fujimi Fantasy Bunko–style reprints) expose only cover, in-book TOC, and colophon in `nav.xhtml` / `toc.ncx`, while real chapter titles live as cross-file `<a href="chapter.xhtml#anchor">` links inside a dedicated in-book TOC XHTML page. v1.06 in-book TOC suppression and span/heading scanners left those nav parents with empty children. This release adds `parseTocPageChapterLinks()` in `EpubParser` so the TOC dialog lists chapter titles as indented children under the in-book TOC entry and navigates to the correct chapter targets.
+- **Release (GitHub):** https://github.com/ussoewwin/JPN-EPUB-Reader/releases/tag/v1.13
+
 ## v1.12
 
 ### Manga EPUB Support (Image-native rendering)
