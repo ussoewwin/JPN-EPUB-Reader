@@ -4,6 +4,20 @@ All notable changes to JPN-EPUB-Reader are documented in this file.
 The project follows a loose `MAJOR.MINOR` numbering scheme with no
 semantic-version guarantees yet.
 
+## v1.16
+
+### ImageRoleClassifier — Kadokawa `class_s2K*` inline gaiji
+
+- **Symptom:** In some commercial vertical-fiction EPUBs, publisher token images marked with Kadokawa-style `class_s2K*` (for example `class_s2K7`, often inside `<ruby><rb>`) appeared as large centered illustrations on a tinted block instead of 1em inline glyphs in the text column.
+- **Root cause:** `ImageRoleClassifier` treated only Fujimi-style `class_s3*` / `class_s3x*` as explicit gaiji classes. Kadokawa `class_s2K*` images were scored as block illustrations (128px penalty), so `VerticalLayoutEngine` laid them out as HALFPAGE/FULLPAGE centered images despite CSS `height: 1em; width: 1em`.
+- **Fix:** Added `CLASS_S2K_GAIJI_IMG_RE` (`^class_s2k[a-z0-9]+$`, classes are lowercased during tokenization) to the explicit gaiji class check in `scoreExplicitClasses()`.
+
+### Files touched
+
+```
+app/src/main/java/com/jpnepub/reader/vrender/ImageRoleClassifier.kt
+```
+
 ## v1.15
 
 ### Vertical renderer — inline gaiji vs illustration classification
