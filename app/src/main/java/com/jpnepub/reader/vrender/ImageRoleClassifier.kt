@@ -7,7 +7,7 @@ package com.jpnepub.reader.vrender
  * 外字 (GAIJI) / 全面挿絵 (FULLPAGE) / 半面挿絵 (HALFPAGE) / 非表示 (SKIP) を決める。
  *
  * 手がかりの例:
- *  - 出版社 CSS の慣習 class (gaiji, pagefit, inline, class_s3X, class_sN-* 等)
+ *  - 出版社 CSS の慣習 class (gaiji, pagefit, inline, class_s3X, class_s2K7, class_sN-* 等)
  *  - 直近の親 [div] の class (class_sN-0 ラッパー + class_sN-1 画像 等)
  *  - 本文テキストに挟まれたインライン配置か
  *  - ピクセル寸法・アスペクト比・面積
@@ -28,6 +28,8 @@ internal object ImageRoleClassifier {
     private val CLASS_S_SUFFIX_RE = Regex("^class_s([a-z0-9]+)-(\\d+)$")
     /** 富士見系 EPUB: 外字 img は class_s3T 等 suffix 無し。挿絵は class_sKW-1 等。 */
     private val CLASS_S_GAIJI_IMG_RE = Regex("^class_s3[a-z0-9]+$")
+    /** 角川等: 外字 img は class_s2K7 等 (128px, CSS 1em)。挿絵は class_s2F-1 等 suffix 付き。 */
+    private val CLASS_S2K_GAIJI_IMG_RE = Regex("^class_s2k[a-z0-9]+$")
 
     fun classify(input: Input): Role {
         val tokens = tokenize(input.cssClass)
@@ -99,6 +101,7 @@ internal object ImageRoleClassifier {
         }
         val explicitGaijiClass = tokens.any {
             CLASS_S_GAIJI_IMG_RE.matches(it) ||
+                CLASS_S2K_GAIJI_IMG_RE.matches(it) ||
                 it == "class_s3x" ||
                 it.startsWith("class_s3x-")
         }
